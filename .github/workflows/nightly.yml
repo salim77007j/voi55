@@ -1,0 +1,74 @@
+name: Nightly memory checks
+
+# D14/D15: ASan build in nightly CI; Valgrind run recorded in the phase
+# report. The dev sandbox has no valgrind and no root, so both checks run
+# here where they are reproducible; run logs are the recorded evidence.
+#
+# ASan scope: mvl-core (DSP, no unsafe) + mvl-audio (buffers, codecs, cpal
+# transport state) — the memory-critical paths that own audio data. The Slint
+# UI layer is exercised leak-wise by the Valgrind job instead (ASan +
+# instrumenting the software-renderer path adds noise without coverage gain).
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  asan:
+    name: ASan (mvl-core + mvl-audio)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install ALSA headers (Linux)
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libasound2-dev
+
+      - uses: Swatinem/rust-cache@v2
+
+      # LeakSanitizer runs at process exit by default on Linux — the test
+      # suite doubles as a leak check for the DSP and I/O crates.
+      - name: Test under AddressSanitizer
+        env:
+          RUSTFLAGS: -Zsanitizer=address
+        run: cargo test -p mvl-core -p mvl-audio
+
+  valgrind:
+    name: Valgrind (headless app run)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install ALSA headers + valgrind
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libasound2-dev valgrind
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build -p mvl-app
+
+      # The full UI stack (platform init, session load + pYIN, waveform
+      # render, PNG encode, teardown) under memcheck. Definite leaks fail
+      # the job.
+      - name: Valgrind the headless screenshot run
+        run: |
+          valgrind --leak-check=full --show-leak-kinds=definite \
+                   --errors-for-leak-kinds=definite --error-exitcode=99 \
+                   target/debug/micro-vocal-lab --screenshot --demo synth --out vg-smoke.png
+          test -s vg-smoke.png
+
+      - name: Upload valgrind smoke screenshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: valgrind-smoke
+          path: vg-smoke.png
+          if-no-files-found: error
