@@ -23,6 +23,10 @@ pub enum AudioError {
     #[error("audio file error: {0}")]
     File(String),
 
+    /// Device-level failure from `cpal` (enumeration, stream build, ...).
+    #[error("audio device error: {0}")]
+    Device(#[from] cpal::Error),
+
     /// Underlying WAV (hound) error.
     #[error("WAV error: {0}")]
     Wav(#[from] hound::Error),
