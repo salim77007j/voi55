@@ -290,7 +290,20 @@ impl PreviewStream {
         let handle = std::thread::Builder::new()
             .name("mvl-preview".into())
             .spawn(move || {
-                worker_loop(worker_shared, session, sample_rate, track, params, start);
+                // Phase 7 ISSUE 3: a panicking DSP worker must never take
+                // the whole app down. The worker exits; the FIFO stalls at
+                // its last chunk (the player stops at the end of buffered
+                // audio) and the error is visible in the stats.
+                let panic_shared = Arc::clone(&worker_shared);
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                    worker_loop(worker_shared, session, sample_rate, track, params, start);
+                }));
+                if outcome.is_err() {
+                    log::error!("preview worker panicked — live preview stopped");
+                    if let Ok(mut stats) = panic_shared.stats.lock() {
+                        stats.error = Some("preview worker panicked".into());
+                    }
+                }
             })
             .map_err(|e| AudioError::Stream(format!("preview worker spawn failed: {e}")))?;
         Ok(Self {

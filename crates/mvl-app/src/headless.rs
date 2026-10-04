@@ -84,6 +84,9 @@ pub struct ScreenshotArgs {
     /// `--export-panel` — open the export panel (the same property the
     /// export button toggles).
     pub export_panel: bool,
+    /// `--devices` — open the devices dialog (the same property the
+    /// devices button toggles; real enumeration runs first).
+    pub devices: bool,
 }
 
 /// Parses `--screenshot --out PATH [flags]`.
@@ -107,12 +110,14 @@ pub fn parse_args(args: &[String]) -> Result<ScreenshotArgs, String> {
     let mut preview = false;
     let mut lang = Lang::En;
     let mut export_panel = false;
+    let mut devices = false;
     let mut it = args.iter().map(String::as_str);
     while let Some(a) = it.next() {
         match a {
             "--screenshot" => {} // mode selector, already consumed
             "--preview" => preview = true,
             "--export-panel" => export_panel = true,
+            "--devices" => devices = true,
             "--lang" => {
                 lang = it
                     .next()
@@ -186,6 +191,7 @@ pub fn parse_args(args: &[String]) -> Result<ScreenshotArgs, String> {
         preview,
         lang,
         export_panel,
+        devices,
     })
 }
 

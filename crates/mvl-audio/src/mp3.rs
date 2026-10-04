@@ -67,10 +67,8 @@ pub fn import_mp3(path: impl AsRef<Path>) -> Result<AudioBuffer> {
         .ok_or_else(|| AudioError::File("no audio track found in file".into()))?;
     let track_id = track.id;
 
-    let mut decoder = symphonia::default::get_codecs().make(
-        &track.codec_params,
-        &DecoderOptions::default(),
-    )?;
+    let mut decoder =
+        symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default())?;
 
     let mut samples: Vec<f32> = Vec::new();
     let mut channels: u16 = 0;
@@ -166,9 +164,9 @@ fn append_decoded(
         AudioBufferRef::S16(buf) => {
             push_interleaved(buf, frames, channels, out, |s| f32::from(s) / 32_768.0)?;
         }
-        AudioBufferRef::S24(buf) => push_interleaved(buf, frames, channels, out, |s| {
-            f32::from_sample(s)
-        })?,
+        AudioBufferRef::S24(buf) => {
+            push_interleaved(buf, frames, channels, out, f32::from_sample)?
+        }
         AudioBufferRef::S32(buf) => {
             push_interleaved(buf, frames, channels, out, |s| s as f32 / 2_147_483_648.0)?;
         }
@@ -185,9 +183,9 @@ fn append_decoded(
                 (f32::from(s) - 32_768.0) / 32_768.0
             })?;
         }
-        AudioBufferRef::U24(buf) => push_interleaved(buf, frames, channels, out, |s| {
-            f32::from_sample(s)
-        })?,
+        AudioBufferRef::U24(buf) => {
+            push_interleaved(buf, frames, channels, out, f32::from_sample)?
+        }
         AudioBufferRef::U32(buf) => {
             push_interleaved(buf, frames, channels, out, |s| {
                 s as f32 / 2_147_483_648.0 - 1.0
@@ -452,7 +450,11 @@ mod tests {
         let first = import_mp3(&path).expect("decode 1 must succeed");
         let second = import_mp3(&path).expect("decode 2 must succeed");
         let _ = std::fs::remove_file(&path);
-        assert_eq!(first.samples(), second.samples(), "decode must be deterministic");
+        assert_eq!(
+            first.samples(),
+            second.samples(),
+            "decode must be deterministic"
+        );
     }
 
     #[test]
@@ -495,8 +497,7 @@ mod tests {
             state ^= state << 17;
             state
         };
-        let path =
-            std::env::temp_dir().join(format!("mvl_fuzz_{}.mp3", std::process::id()));
+        let path = std::env::temp_dir().join(format!("mvl_fuzz_{}.mp3", std::process::id()));
         for i in 0..64 {
             let len = (next() % 4096) as usize + 64;
             let mut blob: Vec<u8> = (0..len).map(|_| (next() & 0xFF) as u8).collect();

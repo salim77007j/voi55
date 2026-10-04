@@ -21,6 +21,13 @@ import "../../../assets/fonts/IBMPlexSansArabic-Regular.ttf";
 import "../../../assets/fonts/IBMPlexSansArabic-Medium.ttf";
 import "../../../assets/fonts/IBMPlexSansArabic-SemiBold.ttf";
 
+// One device entry in the picker lists; `active` mirrors the device the
+// engine will actually use (explicit choice or resolved default).
+export struct DeviceItem {
+    name: string,
+    active: bool,
+}
+
 export component AppWindow inherits Window {
     title: root.t-title;
     preferred-width: 1280px;
@@ -107,6 +114,24 @@ export component AppWindow inherits Window {
     callback transport-rewind();
     callback record-toggle();
 
+    // ── Devices dialog (Phase 7.1) ─────────────────────────────
+    in property <bool> devices-open: false;
+    in property <[DeviceItem]> input-items;
+    in property <[DeviceItem]> output-items;
+    in property <bool> test-playing: false;
+    in property <string> t-devices;
+    in property <string> t-devices-in;
+    in property <string> t-devices-out;
+    in property <string> t-devices-test;
+    in property <string> t-devices-refresh;
+    in property <string> t-devices-none;
+    in property <string> t-devices-close;
+    callback devices-toggle();
+    callback devices-refresh();
+    callback device-picked(name: string, kind: int);
+    callback test-output();
+    callback devices-close();
+
     VerticalLayout {
         spacing: 0;
         padding: 0;
@@ -147,6 +172,14 @@ export component AppWindow inherits Window {
                 }
 
                 Rectangle { layout-order: 3; } // spring
+
+                devbtn := IconButton {
+                    layout-order: root.rtl ? 3 : 3;
+                    icon: Icons.headphones;
+                    enabled: true;
+                    active: root.devices-open;
+                    clicked => { root.devices-toggle(); }
+                }
 
                 langbtn := ChipButton {
                     layout-order: root.rtl ? 2 : 4;
@@ -393,6 +426,209 @@ export component AppWindow inherits Window {
                     vertical-alignment: center;
                     width: parent.width;
                     height: parent.height;
+                }
+            }
+        }
+    }
+
+    // ── Devices dialog (floating overlay, Phase 7.1) ────────────────
+    // Last child of the window so it paints above every sibling (same
+    // rule as the export panel). Centered; a full-window scrim closes it.
+    if root.devices-open: Rectangle {
+        background: #00000066;
+
+        // Scrim click-through closer.
+        TouchArea {
+            clicked => { root.devices-close(); }
+        }
+
+        devices-panel := Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 380px;
+            height: 460px;
+            background: Tokens.bg-elevated;
+            border-radius: Tokens.radius-md;
+            border-width: 1px;
+            border-color: Tokens.border-subtle;
+
+            // Keep panel clicks from reaching the scrim closer.
+            TouchArea { }
+
+            VerticalLayout {
+                padding: Tokens.sp-2;
+                spacing: Tokens.sp-1;
+
+                // Title row.
+                HorizontalLayout {
+                    spacing: Tokens.sp-1;
+                    height: 20px;
+
+                    Text {
+                        layout-order: root.rtl ? 1 : 0;
+                        text: root.t-devices;
+                        color: Tokens.text-primary;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+                    Rectangle { layout-order: root.rtl ? 0 : 1; } // spring
+                    IconButton {
+                        layout-order: root.rtl ? 2 : 2;
+                        icon: Icons.stop;
+                        glyph: Tokens.text-muted;
+                        clicked => { root.devices-close(); }
+                    }
+                }
+
+                // ── Input section ─────────────────────────────
+                Text {
+                    text: root.t-devices-in;
+                    color: Tokens.text-muted;
+                    font-size: Tokens.font-size-small;
+                    height: 14px;
+                }
+
+                Rectangle {
+                    border-radius: Tokens.radius-sm;
+                    border-width: 1px;
+                    border-color: Tokens.border-subtle;
+
+                    if root.input-items.length == 0: Text {
+                        text: root.t-devices-none;
+                        color: Tokens.text-muted;
+                        font-size: Tokens.font-size-small;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        width: parent.width;
+                        height: parent.height;
+                    }
+
+                    if root.input-items.length > 0: VerticalLayout {
+                        padding: 2px;
+                        // Cap the list; scroll when it overflows.
+                        for item in root.input-items: Rectangle {
+                            height: 24px;
+                            border-radius: Tokens.radius-sm;
+                            background: dev-touch.has-hover ? Tokens.bg-elevated-hover
+                                : item.active ? Tokens.bg-base : transparent;
+                            border-width: 1px;
+                            border-color: item.active ? Tokens.accent-pitch : transparent;
+
+                            dev-touch := TouchArea {
+                                clicked => { root.device-picked(item.name, 0); }
+                            }
+
+                            Text {
+                                text: item.name;
+                                color: item.active ? Tokens.accent-pitch : Tokens.text-primary;
+                                font-size: Tokens.font-size-small;
+                                vertical-alignment: center;
+                                overflow: elide;
+                                x: 6px;
+                                width: parent.width - 12px;
+                            }
+                        }
+                    }
+                }
+
+                // ── Output section ────────────────────────────
+                Text {
+                    text: root.t-devices-out;
+                    color: Tokens.text-muted;
+                    font-size: Tokens.font-size-small;
+                    height: 14px;
+                }
+
+                Rectangle {
+                    border-radius: Tokens.radius-sm;
+                    border-width: 1px;
+                    border-color: Tokens.border-subtle;
+
+                    if root.output-items.length == 0: Text {
+                        text: root.t-devices-none;
+                        color: Tokens.text-muted;
+                        font-size: Tokens.font-size-small;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        width: parent.width;
+                        height: parent.height;
+                    }
+
+                    if root.output-items.length > 0: VerticalLayout {
+                        padding: 2px;
+                        for item in root.output-items: Rectangle {
+                            height: 24px;
+                            border-radius: Tokens.radius-sm;
+                            background: dev-touch2.has-hover ? Tokens.bg-elevated-hover
+                                : item.active ? Tokens.bg-base : transparent;
+                            border-width: 1px;
+                            border-color: item.active ? Tokens.accent-formant : transparent;
+
+                            dev-touch2 := TouchArea {
+                                clicked => { root.device-picked(item.name, 1); }
+                            }
+
+                            Text {
+                                text: item.name;
+                                color: item.active ? Tokens.accent-formant : Tokens.text-primary;
+                                font-size: Tokens.font-size-small;
+                                vertical-alignment: center;
+                                overflow: elide;
+                                x: 6px;
+                                width: parent.width - 12px;
+                            }
+                        }
+                    }
+                }
+
+                Rectangle { } // spring
+
+                // ── Footer: test tone + refresh ───────────────
+                HorizontalLayout {
+                    spacing: Tokens.sp-1;
+                    height: 30px;
+
+                    testbtn := Rectangle {
+                        border-radius: Tokens.radius-sm;
+                        background: test-touch.has-hover ? Tokens.bg-elevated-hover : Tokens.bg-base;
+                        border-width: 1px;
+                        border-color: Tokens.accent-air;
+
+                        test-touch := TouchArea {
+                            clicked => { root.test-output(); }
+                        }
+
+                        Text {
+                            text: root.test-playing ? "▶ " + root.t-devices-test : root.t-devices-test;
+                            color: Tokens.text-primary;
+                            font-weight: 600;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            width: parent.width;
+                            height: parent.height;
+                        }
+                    }
+
+                    Rectangle {
+                        border-radius: Tokens.radius-sm;
+                        background: refresh-touch.has-hover ? Tokens.bg-elevated-hover : Tokens.bg-base;
+                        border-width: 1px;
+                        border-color: Tokens.border-subtle;
+                        width: 72px;
+
+                        refresh-touch := TouchArea {
+                            clicked => { root.devices-refresh(); }
+                        }
+
+                        Text {
+                            text: root.t-devices-refresh;
+                            color: Tokens.text-primary;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            width: parent.width;
+                            height: parent.height;
+                        }
+                    }
                 }
             }
         }

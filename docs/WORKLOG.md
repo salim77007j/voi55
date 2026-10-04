@@ -263,3 +263,64 @@ round-trip unit tests. Commit after each sub-item.
   native-Arabic review on real machines (user-side), triage any
   failure, then tag `v1.0.0`. No further sandbox-side code work is
   planned unless a hardware run finds something.
+
+## 2026-10-04 — Phase 7.1: P0 fixes (a: symphonia, b/c: devices, d: robustness)
+
+User feedback on real machines: import/DSP work, but the UI reads
+student-grade and real-machine audio-device handling is fragile. Phase 7
+opened: 7.1 = the four P0 fixes, 7.2 = professional UI redesign against
+the uploaded reference (repo root `reference.png`, "Audioprecise Pro"
+style — analyzed, becomes the 7.2 visual target).
+
+- **7.1a (7848903)** — symphonia 0.6 → **0.5.5** (mature line; 0.6 is a
+  self-declared preview). Import ported to the 0.5 API (`probe.format()`,
+  `CodecParams` value, `CodecRegistry::make`, `Cow<AudioBuffer<S>>`
+  variants, `Signal::chan`, `FromSample` i24/u24). Robustness gain: torn
+  packets are skipped (DecodeError → warn) instead of failing the file;
+  EOF handled via UnexpectedEof IoError. New tests: decode determinism
+  (bit-identical), truncated file, 64 seeded random blobs. 45 audio tests
+  green.
+- **7.1b+c — device management (inputs AND outputs)**
+  - `resolve_input_device` / `resolve_output_device` (mvl-audio): honest
+    fallback chain — explicit name → platform default → first working
+    device; returns whether it fell back so the UI can say so.
+  - `Recorder::start_named` / `Player::connect_named`; the app stores the
+    user's pick per direction and passes it on every connection.
+  - `list_output_devices` (name, config count, max rate, granted formats)
+    mirrors the existing input enumeration; the startup banner lists both.
+  - Player negotiation rewritten: **any granted sample format**
+    (f32 > i32 > i16 > 8-bit — generic `build_output_stream::<T>` with a
+    reused f32 scratch, clamped `FromF32` conversion) and **any channel
+    count** (previous hard cap of f32/stereo removed).
+  - Slint **Devices dialog** (headphones button in the header, RTL-aware
+    layout, EN/AR strings in i18n with template tests): real-enumerated
+    input/output lists with the effective device highlighted, per-row
+    pick retargets the next capture/playback, output pick re-homes the
+    player immediately, **Test output** plays a real 440 Hz / 0.3 s tone
+    (flag follows the actual transport in the 40 ms poller — no timers).
+  - Headless evidence: `--devices` flag renders the dialog through the
+    same software-renderer path (`docs/evidence/phase7/devices-dialog-
+    {en,ar-rtl}.png`); the sandbox's ALSA null device shows up, proving
+    the enumeration is real.
+  - Platform notes documented in `devices.rs` (WASAPI shared-mode,
+    CoreAudio permission-on-first-capture + NSMicrophoneUsageDescription
+    bundle task, PipeWire/PulseAudio via the ALSA plugin stack, loopback
+    not enumerated — honest scope).
+- **7.1d — robustness**
+  - Zero-frame capture guard: `Recorder::stop` → `finalize_capture`
+    returns the new named `AudioError::EmptyCapture` ("the device
+    produced no audio") instead of an empty buffer the UI would accept;
+    unit-tested for empty/torn/one-frame inputs.
+  - `catch_unwind` around the two worker threads: the offline render
+    thread (panic → `RenderDone::Failed` with the payload text) and the
+    Phase 6 preview worker (panic → FIFO stalls, stats.error set, app
+    keeps running). RT callbacks stay panic-free by construction; the
+    global panic hook prints thread/location context.
+- Quality at HEAD: **118 tests green** (56 core + 48 audio + 12 app +
+  2 integration), fmt + clippy `-D warnings` clean workspace-wide.
+- 7.1b/c/d share files (capture.rs/app.rs/main.rs carry both the device
+  and the robustness changes), so they land as one commit with this
+  three-part record; 7.1a went separately as 7848903.
+- NEXT: 7.2 — the professional studio UI redesign against the reference
+  image (dense channel-strip panels, RTA spectrum analyzer from real
+  FFTs, transport + meters, before/after), awaits "continue".

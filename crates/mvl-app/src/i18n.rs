@@ -77,6 +77,23 @@ pub struct StrTable {
     pub view_label: &'static str,
     /// Render-report label when no stage deviates from neutral.
     pub neutral: &'static str,
+    // ── Devices dialog (Phase 7.1) ──────────────────────────────
+    pub devices_title: &'static str,
+    pub devices_in: &'static str,
+    pub devices_out: &'static str,
+    pub devices_test: &'static str,
+    pub devices_refresh: &'static str,
+    pub devices_none: &'static str,
+    pub devices_close: &'static str,
+    /// Status: input device now `{name}`.
+    pub status_input_selected: &'static str,
+    /// Status: output device now `{name}`.
+    pub status_output_selected: &'static str,
+    /// Status suffix when the requested device was gone and a fallback
+    /// device was used instead.
+    pub device_fallback: &'static str,
+    /// Status: the output test tone played.
+    pub status_test_played: &'static str,
 }
 
 pub const EN: StrTable = StrTable {
@@ -113,6 +130,17 @@ pub const EN: StrTable = StrTable {
     track_preview: "{name} — preview (rendered)",
     view_label: "view",
     neutral: "neutral",
+    devices_title: "Audio Devices",
+    devices_in: "Input (microphone)",
+    devices_out: "Output (playback)",
+    devices_test: "Test output",
+    devices_refresh: "Refresh",
+    devices_none: "No devices found",
+    devices_close: "Close",
+    status_input_selected: "input device → {name}{fallback}",
+    status_output_selected: "output device → {name}{fallback}",
+    device_fallback: " (fell back — requested device unavailable)",
+    status_test_played: "output test tone played on {name}",
 };
 
 pub const AR: StrTable = StrTable {
@@ -149,6 +177,17 @@ pub const AR: StrTable = StrTable {
     track_preview: "{name} — معاينة (معالَجة)",
     view_label: "عرض",
     neutral: "محايد",
+    devices_title: "الأجهزة الصوتية",
+    devices_in: "المدخل (الميكروفون)",
+    devices_out: "المخرج (التشغيل)",
+    devices_test: "اختبار المخرج",
+    devices_refresh: "تحديث",
+    devices_none: "لا توجد أجهزة",
+    devices_close: "إغلاق",
+    status_input_selected: "جهاز المدخل ← {name}{fallback}",
+    status_output_selected: "جهاز المخرج ← {name}{fallback}",
+    device_fallback: " (تحوّل تلقائي — الجهاز المطلوب غير متاح)",
+    status_test_played: "تم تشغيل نغمة الاختبار على {name}",
 };
 
 pub const AR_RECORD_CAP: &str = " (الجهاز محدود — 192 kHz غير متاح)";
@@ -231,6 +270,19 @@ mod tests {
             assert!(t.track_preview.contains("{name}"));
             assert!(!t.view_label.is_empty());
             assert!(!t.neutral.is_empty());
+            // Devices dialog (7.1): every label exists in both tables;
+            // the selection templates name their device placeholder.
+            assert!(!t.devices_title.is_empty());
+            assert!(!t.devices_in.is_empty());
+            assert!(!t.devices_out.is_empty());
+            assert!(!t.devices_test.is_empty());
+            assert!(!t.devices_refresh.is_empty());
+            assert!(!t.devices_none.is_empty());
+            assert!(!t.devices_close.is_empty());
+            assert!(t.status_input_selected.contains("{name}"));
+            assert!(t.status_output_selected.contains("{name}"));
+            assert!(t.status_test_played.contains("{name}"));
+            assert!(!t.device_fallback.is_empty());
         }
         // Compile-time-checked invariants (clippy wants const blocks for
         // constant assertions — they are constants on purpose).

@@ -31,6 +31,11 @@ pub enum AudioError {
     #[error("WAV error: {0}")]
     Wav(#[from] hound::Error),
 
+    /// The capture finished with no complete frame (silent/unplugged
+    /// device, denied permissions, device reset before any callback).
+    #[error("zero-frame recording (the device produced no audio)")]
+    EmptyCapture,
+
     /// Codec-level failure (MP3 decode/encode) with context.
     #[error("codec error: {0}")]
     Codec(String),

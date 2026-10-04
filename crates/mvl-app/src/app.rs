@@ -17,6 +17,7 @@
 //! view.
 
 use crate::AppWindow;
+use crate::DeviceItem;
 use crate::dialogs;
 use crate::i18n::{self, Lang};
 use crate::session::Session;
@@ -24,7 +25,7 @@ use crate::waveform::{self, STUDIO_COLORS, View, WaveformColors, WaveformPyramid
 use mvl_audio::AudioBuffer;
 use mvl_core::VERSION;
 use mvl_core::engine::EngineParams;
-use slint::{ComponentHandle, Image, Rgba8Pixel, SharedPixelBuffer};
+use slint::{ComponentHandle, Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::rc::Weak;
@@ -52,6 +53,17 @@ struct PreviewRender {
 enum RenderDone {
     Ok(Box<PreviewRender>),
     Failed(String),
+}
+
+/// Extracts a human-readable message from a panic payload (any type).
+fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = panic.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = panic.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "unknown panic payload".to_string()
+    }
 }
 
 /// Root application object. `Rc`-held (Slint is single-threaded); use
@@ -90,6 +102,11 @@ pub struct App {
     /// UI language (4.5): drives strings, embedded font and layout
     /// direction; defaults to English (D1).
     lang: Cell<Lang>,
+    /// User-picked input device (Phase 7.1). `None` = platform default
+    /// (with the resolve chain as the safety net).
+    selected_input: RefCell<Option<String>>,
+    /// User-picked output device (Phase 7.1).
+    selected_output: RefCell<Option<String>>,
 }
 
 impl App {
@@ -122,6 +139,8 @@ impl App {
             dirty: Cell::new(false),
             live: RefCell::new(None),
             lang: Cell::new(Lang::En),
+            selected_input: RefCell::new(None),
+            selected_output: RefCell::new(None),
         });
         *app.self_weak.borrow_mut() = Rc::downgrade(&app);
 
@@ -258,6 +277,45 @@ impl App {
             }
         });
 
+        // Devices dialog (Phase 7.1): open/refresh enumerate through the
+        // same mvl-audio paths the engine uses; picking re-targets the
+        // next capture/playback connection; Test output plays a real tone
+        // through the (re)connected player.
+        let weak = Rc::downgrade(&app);
+        app.window.on_devices_toggle(move || {
+            if let Some(app) = weak.upgrade() {
+                let open = !app.window.get_devices_open();
+                app.window.set_devices_open(open);
+                if open {
+                    app.refresh_devices();
+                }
+            }
+        });
+        let weak = Rc::downgrade(&app);
+        app.window.on_devices_refresh(move || {
+            if let Some(app) = weak.upgrade() {
+                app.refresh_devices();
+            }
+        });
+        let weak = Rc::downgrade(&app);
+        app.window.on_devices_close(move || {
+            if let Some(app) = weak.upgrade() {
+                app.window.set_devices_open(false);
+            }
+        });
+        let weak = Rc::downgrade(&app);
+        app.window.on_device_picked(move |name, kind| {
+            if let Some(app) = weak.upgrade() {
+                app.device_picked(name.as_ref(), kind);
+            }
+        });
+        let weak = Rc::downgrade(&app);
+        app.window.on_test_output(move || {
+            if let Some(app) = weak.upgrade() {
+                app.test_output();
+            }
+        });
+
         // UI poller: transport state, playhead and time readout.
         let weak = app.self_weak.borrow().clone();
         app.poll_timer.borrow_mut().start(
@@ -339,6 +397,13 @@ impl App {
         self.window.set_t_export_go(t.export_go.into());
         self.window.set_t_bitrate(t.bitrate.into());
         self.window.set_t_language(t.language_label.into());
+        self.window.set_t_devices(t.devices_title.into());
+        self.window.set_t_devices_in(t.devices_in.into());
+        self.window.set_t_devices_out(t.devices_out.into());
+        self.window.set_t_devices_test(t.devices_test.into());
+        self.window.set_t_devices_refresh(t.devices_refresh.into());
+        self.window.set_t_devices_none(t.devices_none.into());
+        self.window.set_t_devices_close(t.devices_close.into());
         self.recompose_base_status();
         self.compose_status(None);
         self.refresh();
@@ -347,6 +412,160 @@ impl App {
     /// The string table for the active language.
     fn t(&self) -> i18n::StrTable {
         i18n::table(self.lang.get())
+    }
+
+    // ── Devices dialog (Phase 7.1) ────────────────────────────
+
+    /// Re-enumerates inputs and outputs into the dialog lists, marking
+    /// the device the engine will actually use (explicit pick, else the
+    /// resolved default) as active. Honest: what you see is what the
+    /// next connection targets.
+    /// Re-enumerates and repopulates the device lists (also the headless
+    /// evidence path — see main.rs --devices).
+    pub fn refresh_devices(&self) {
+        let active_input = self.effective_input_name();
+        let active_output = self.effective_output_name();
+
+        let inputs: Vec<DeviceItem> = mvl_audio::list_input_devices()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|d| {
+                let active = active_input.as_deref() == Some(d.name.as_str());
+                DeviceItem {
+                    name: d.name.into(),
+                    active,
+                }
+            })
+            .collect();
+        let outputs: Vec<DeviceItem> = mvl_audio::list_output_devices()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|d| {
+                let active = active_output.as_deref() == Some(d.name.as_str());
+                DeviceItem {
+                    name: d.name.into(),
+                    active,
+                }
+            })
+            .collect();
+
+        self.window
+            .set_input_items(ModelRc::new(VecModel::from(inputs)));
+        self.window
+            .set_output_items(ModelRc::new(VecModel::from(outputs)));
+    }
+
+    /// The device name the next capture will use (explicit pick, else the
+    /// resolved fallback-chain default; `None` when nothing resolves).
+    fn effective_input_name(&self) -> Option<String> {
+        if let Some(name) = self.selected_input.borrow().as_ref() {
+            return Some(name.clone());
+        }
+        mvl_audio::resolve_input_device(None)
+            .ok()
+            .map(|(d, _)| d.to_string())
+    }
+
+    /// The device name the next playback connection will use.
+    fn effective_output_name(&self) -> Option<String> {
+        if let Some(name) = self.selected_output.borrow().as_ref() {
+            return Some(name.clone());
+        }
+        mvl_audio::resolve_output_device(None)
+            .ok()
+            .map(|(d, _)| d.to_string())
+    }
+
+    /// Applies a device pick: stores it, retargets the next connection,
+    /// and (for outputs) re-homes the live player immediately so the
+    /// change is audible without restarting the app.
+    fn device_picked(&self, name: &str, kind: i32) {
+        let fallback = self.t().device_fallback;
+        match kind {
+            0 => {
+                *self.selected_input.borrow_mut() = Some(name.to_string());
+                // A running capture keeps its old device (honest: noted in
+                // the status line); the next arm uses the new one.
+                let fell_back = mvl_audio::resolve_input_device(Some(name))
+                    .map(|(_, fell)| fell)
+                    .unwrap_or(true);
+                self.status(
+                    self.t().status_input_selected,
+                    &[
+                        ("name", self.num(name.to_string())),
+                        (
+                            "fallback",
+                            if fell_back {
+                                fallback.to_string()
+                            } else {
+                                String::new()
+                            },
+                        ),
+                    ],
+                );
+            }
+            _ => {
+                *self.selected_output.borrow_mut() = Some(name.to_string());
+                // Re-home the player now (drop + reconnect on the new
+                // device; transport resets — disclosed by the status).
+                *self.player.borrow_mut() = None;
+                let fell_back = mvl_audio::resolve_output_device(Some(name))
+                    .map(|(_, fell)| fell)
+                    .unwrap_or(true);
+                self.status(
+                    self.t().status_output_selected,
+                    &[
+                        ("name", self.num(name.to_string())),
+                        (
+                            "fallback",
+                            if fell_back {
+                                fallback.to_string()
+                            } else {
+                                String::new()
+                            },
+                        ),
+                    ],
+                );
+                self.refresh_devices();
+            }
+        }
+    }
+
+    /// Test output: connects (or re-homes) the player on the selected
+    /// device and plays a real 440 Hz / 0.3 s tone. No fake meters — the
+    /// user either hears it or gets the error in the status line.
+    fn test_output(&self) {
+        let name = self.selected_output.borrow().clone();
+        let connect = mvl_audio::Player::connect_named(name.as_deref());
+        match connect {
+            Ok(player) => {
+                let (rate, _ch) = player.output_format();
+                let tone = AudioBuffer::sine(0.3, rate, 1, 440.0)
+                    .unwrap_or_else(|_| AudioBuffer::new(rate, 1).expect("static config"));
+                *self.player.borrow_mut() = Some(player);
+                let active = self.effective_output_name().unwrap_or_default();
+                if let Some(p) = self.player.borrow_mut().as_mut() {
+                    let result = p.play(std::sync::Arc::new(tone));
+                    match result {
+                        Ok(()) => {
+                            self.window.set_test_playing(true);
+                            self.status(self.t().status_test_played, &[("name", self.num(active))]);
+                            // The flag clears in poll_transport when the
+                            // transport leaves Playing (state follows the
+                            // real player, never a timer).
+                        }
+                        Err(e) => self.status(
+                            self.t().status_playback_failed,
+                            &[("error", self.num(e.to_string()))],
+                        ),
+                    }
+                }
+            }
+            Err(e) => self.status(
+                self.t().status_no_playback,
+                &[("error", self.num(e.to_string()))],
+            ),
+        }
     }
 
     /// Wraps a technical/numeric fragment in LTR marks when the UI runs
@@ -570,18 +789,23 @@ impl App {
         self.start_render_poller();
 
         std::thread::spawn(move || {
-            let t0 = Instant::now();
-            let rendered = mvl_audio::engine::render_mono_to_buffer(
-                &mono,
-                sample_rate,
-                1, // preview is stored mono (see PreviewRender)
-                &params,
-                track.as_deref(),
-            );
-            let render_ms = t0.elapsed().as_secs_f64() * 1000.0;
+            // Phase 7 ISSUE 3: a panicking render must never take the app
+            // down — convert the panic into the normal Failed path.
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                let t0 = Instant::now();
+                let rendered = mvl_audio::engine::render_mono_to_buffer(
+                    &mono,
+                    sample_rate,
+                    1, // preview is stored mono (see PreviewRender)
+                    &params,
+                    track.as_deref(),
+                );
+                let render_ms = t0.elapsed().as_secs_f64() * 1000.0;
+                (rendered, render_ms)
+            }));
             rendering.store(false, Ordering::SeqCst);
-            let _ = tx.send(match rendered {
-                Ok(buffer) => {
+            let done = match result {
+                Ok((Ok(buffer), render_ms)) => {
                     let pyramid = WaveformPyramid::build(buffer.samples(), buffer.sample_rate());
                     RenderDone::Ok(Box::new(PreviewRender {
                         buffer,
@@ -590,8 +814,12 @@ impl App {
                         params,
                     }))
                 }
-                Err(e) => RenderDone::Failed(e.to_string()),
-            });
+                Ok((Err(e), _)) => RenderDone::Failed(e.to_string()),
+                Err(panic) => {
+                    RenderDone::Failed(format!("render thread panicked: {}", panic_message(&panic)))
+                }
+            };
+            let _ = tx.send(done);
         });
     }
 
@@ -862,17 +1090,21 @@ impl App {
     }
 
     fn play_pause(&self) {
-        // Lazily connect; honest failure without a device.
-        if self.player.borrow().is_none()
-            && let Err(e) = mvl_audio::Player::connect().map(|p| {
+        // Lazily connect; honest failure without a device. The user's
+        // device pick (if any) steers the connection; the resolve chain
+        // inside connect_named covers a vanished device.
+        if self.player.borrow().is_none() {
+            let out_name = self.selected_output.borrow().clone();
+            let connect = mvl_audio::Player::connect_named(out_name.as_deref());
+            if let Err(e) = connect.map(|p| {
                 *self.player.borrow_mut() = Some(p);
-            })
-        {
-            self.status(
-                self.t().status_no_playback,
-                &[("error", self.num(e.to_string()))],
-            );
-            return;
+            }) {
+                self.status(
+                    self.t().status_no_playback,
+                    &[("error", self.num(e.to_string()))],
+                );
+                return;
+            }
         }
         let transport = self
             .player
@@ -976,7 +1208,8 @@ impl App {
         if let Some(p) = self.player.borrow_mut().as_ref() {
             let _ = p.stop();
         }
-        match mvl_audio::Recorder::start() {
+        let input_name = self.selected_input.borrow().clone();
+        match mvl_audio::Recorder::start_named(input_name.as_deref()) {
             Ok(recorder) => {
                 let info = recorder.info().clone();
                 let matched = info.matched_preferred_rate;
@@ -1020,6 +1253,18 @@ impl App {
                 );
             }
             return;
+        }
+        // Test-output flag follows the real transport (never a timer):
+        // as soon as the player is not Playing, the affordance resets.
+        if self.window.get_test_playing() {
+            let still_playing = self
+                .player
+                .borrow()
+                .as_ref()
+                .is_some_and(|p| p.transport() == mvl_audio::Transport::Playing);
+            if !still_playing {
+                self.window.set_test_playing(false);
+            }
         }
         let player = self.player.borrow();
         let Some(player) = player.as_ref() else {

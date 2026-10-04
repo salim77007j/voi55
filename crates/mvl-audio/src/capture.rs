@@ -12,7 +12,7 @@
 //! *and* the negotiated rate so the UI never has to guess.
 
 use crate::buffer::AudioBuffer;
-use crate::devices::{convertible, default_input_device};
+use crate::devices::convertible;
 use crate::error::{AudioError, Result};
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{BufferSize, SampleFormat, Stream, StreamConfig};
@@ -135,15 +135,26 @@ pub struct Recorder {
 }
 
 impl Recorder {
-    /// Starts capturing from the platform's default input device,
-    /// requesting [`PREFERRED_SAMPLE_RATE`] in `f32`.
+    /// Starts capturing from the resolved default input device (fallback
+    /// chain: platform default → first working input), requesting
+    /// [`PREFERRED_SAMPLE_RATE`] in `f32`.
     ///
     /// # Errors
     /// [`AudioError::NoDevice`] without an input device;
     /// [`AudioError::UnsupportedConfig`] when the device offers nothing
     /// convertible; [`AudioError::Stream`] when the stream cannot start.
     pub fn start() -> Result<Self> {
-        let device = default_input_device()?;
+        Self::start_named(None)
+    }
+
+    /// Starts capturing from a device chosen by name, falling back through
+    /// the [`crate::devices::resolve_input_device`] chain (explicit name →
+    /// default → first working input) when the exact device is gone.
+    ///
+    /// # Errors
+    /// See [`Recorder::start`].
+    pub fn start_named(device_name: Option<&str>) -> Result<Self> {
+        let (device, _fell_back) = crate::devices::resolve_input_device(device_name)?;
         Self::start_on_device(&device, PREFERRED_SAMPLE_RATE)
     }
 
@@ -257,7 +268,9 @@ impl Recorder {
     ///
     /// # Errors
     /// [`AudioError::Stream`] if the device reported a fatal error mid-run;
-    /// [`AudioError::UnsupportedConfig`] if no complete frame was captured.
+    /// [`AudioError::EmptyCapture`] when no complete frame was captured
+    /// (unplugged/muted device, denied OS permission — a clear error, not
+    /// a silent empty buffer).
     pub fn stop(mut self) -> Result<AudioBuffer> {
         if let Ok(mut state) = self.shared.lock() {
             state.recording = false;
@@ -272,15 +285,36 @@ impl Recorder {
         if let Some(err) = state.stream_error.take() {
             return Err(AudioError::Stream(err));
         }
-        let ch = usize::from(self.info.channels);
-        let complete = state.samples.len() - state.samples.len() % ch;
-        state.samples.truncate(complete);
-        AudioBuffer::from_interleaved(
+        finalize_capture(
+            std::mem::take(&mut state.samples),
             self.info.sample_rate,
             self.info.channels,
-            std::mem::take(&mut state.samples),
         )
     }
+}
+
+/// Turns the raw interleaved staging buffer into an [`AudioBuffer`] (pure,
+/// unit-tested). Rejects a zero-frame capture with
+/// [`AudioError::EmptyCapture`] instead of silently handing the UI an
+/// empty project.
+///
+/// # Errors
+/// [`AudioError::EmptyCapture`] on an empty or torn (incomplete frame)
+/// capture; [`AudioError::UnsupportedConfig`] on an invalid channel/rate
+/// pairing.
+pub(crate) fn finalize_capture(
+    samples: Vec<f32>,
+    sample_rate: u32,
+    channels: u16,
+) -> Result<AudioBuffer> {
+    let ch = usize::from(channels.max(1));
+    let complete = samples.len() - samples.len() % ch;
+    if complete == 0 {
+        return Err(AudioError::EmptyCapture);
+    }
+    let mut buffer = AudioBuffer::from_interleaved(sample_rate, channels, samples)?;
+    buffer.truncate_frames(complete / ch);
+    Ok(buffer)
 }
 
 /// Builds an input stream for one concrete sample type `T`, converting into
@@ -422,6 +456,21 @@ mod tests {
     fn rejects_only_unconvertible_formats() {
         let cands = vec![cand(2, 44_100, 48_000, SampleFormat::F64)];
         assert!(plan_capture(&cands, 192_000).is_none());
+    }
+
+    #[test]
+    fn zero_frame_capture_is_a_clear_error_not_an_empty_buffer() {
+        // Regression (Phase 7.1 ISSUE 3): stopping a capture whose device
+        // never delivered a callback must yield a named error, not an
+        // empty project the UI would silently accept.
+        let err = finalize_capture(Vec::new(), 48_000, 1).unwrap_err();
+        assert!(matches!(err, AudioError::EmptyCapture), "got {err:?}");
+        // Torn capture (half a stereo frame) is equally empty.
+        let err = finalize_capture(vec![0.5], 48_000, 2).unwrap_err();
+        assert!(matches!(err, AudioError::EmptyCapture), "got {err:?}");
+        // A complete single frame passes.
+        let buf = finalize_capture(vec![0.5, -0.5], 48_000, 2).expect("one stereo frame");
+        assert_eq!(buf.frames(), 1);
     }
 
     #[test]

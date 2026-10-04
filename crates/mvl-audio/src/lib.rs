@@ -34,7 +34,10 @@ pub mod wav;
 
 pub use buffer::AudioBuffer;
 pub use capture::{CaptureInfo, CapturePlan, ConfigCandidate, PREFERRED_SAMPLE_RATE, Recorder};
-pub use devices::{DeviceInfo, list_input_devices};
+pub use devices::{
+    DeviceInfo, OutputDeviceInfo, list_input_devices, list_output_devices, resolve_input_device,
+    resolve_output_device,
+};
 pub use error::{AudioError, Result};
 pub use mp3::{DEFAULT_MP3_BITRATE, MP3_BITRATES, MP3_SAMPLE_RATES, export_mp3, import_mp3};
 pub use player::{Player, Transport};

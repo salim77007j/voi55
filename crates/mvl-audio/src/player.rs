@@ -1,13 +1,19 @@
 //! Playback via `cpal` — play/pause/stop (Phase 2 scope, architecture plan
 //! D2/D6).
 //!
-//! The player owns an `f32` output stream on the default output device and
-//! consumes [`AudioBuffer`]s — or, since Phase 6, a streaming preview
-//! [`StreamFifo`] (see [`crate::preview`]): the callback pulls mono frames
-//! from the FIFO and maps them to the output channels, so the transport
-//! works identically for both sources. The FIFO source requires the
-//! session rate to match the device rate (the caller checks; there is no
-//! resampler on the real-time path — disclosed).
+//! The player owns an output stream on the default (or user-selected)
+//! output device and consumes [`AudioBuffer`]s — or, since Phase 6, a
+//! streaming preview [`StreamFifo`] (see [`crate::preview`]): the callback
+//! pulls mono frames from the FIFO and maps them to the output channels, so
+//! the transport works identically for both sources. The FIFO source
+//! requires the session rate to match the device rate (the caller checks;
+//! there is no resampler on the real-time path — disclosed).
+//!
+//! Phase 7: the output stream is negotiated in **whatever sample format the
+//! device grants** (f32/i32/i16/i8/u8 — the internal state stays `f32`, the
+//! callback converts), **any channel count** (mono→N mapping, generic N→M
+//! fold), and by explicit device name with a fallback chain (see
+//! [`crate::devices::resolve_output_device`]).
 //!
 //! Buffers are transparently resampled to the output device's rate (via
 //! [`crate::resample`]) and channel-mapped in the callback. Transport
@@ -17,8 +23,8 @@
 use crate::buffer::AudioBuffer;
 use crate::error::{AudioError, Result};
 use crate::preview::StreamFifo;
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, SampleFormat, Stream};
+use cpal::traits::{DeviceTrait, StreamTrait};
+use cpal::{Device, SampleFormat, Stream, StreamConfig};
 use std::sync::{Arc, Mutex};
 
 /// Transport state of the player.
@@ -62,8 +68,17 @@ impl Player {
     /// mono/stereo configuration; [`AudioError::Device`] / [`AudioError::Stream`]
     /// for cpal failures.
     pub fn connect() -> Result<Self> {
-        let host = cpal::default_host();
-        let device = host.default_output_device().ok_or(AudioError::NoDevice)?;
+        Self::connect_named(None)
+    }
+
+    /// Connects to an output device by name, falling back through the
+    /// [`crate::devices::resolve_output_device`] chain (explicit name →
+    /// default → first working device) when the exact device is gone.
+    ///
+    /// # Errors
+    /// See [`Player::connect`].
+    pub fn connect_named(device_name: Option<&str>) -> Result<Self> {
+        let (device, _fell_back) = crate::devices::resolve_output_device(device_name)?;
         Self::connect_on_device(&device)
     }
 
@@ -72,23 +87,30 @@ impl Player {
     /// # Errors
     /// See [`Player::connect`].
     pub fn connect_on_device(device: &Device) -> Result<Self> {
-        // Prefer an f32 mono/stereo configuration closest to the device's
-        // default rate.
-        let mut best: Option<(cpal::SupportedStreamConfig, u32)> = None;
+        // Pick the best convertible output configuration: any granted
+        // sample format (f32 > i32 > i16 > 8-bit), any channel count,
+        // aiming for 48 kHz or the nearest rate the range allows.
+        let mut best: Option<(cpal::SupportedStreamConfig, (u8, u32, u32))> = None;
         for range in device.supported_output_configs()? {
-            if range.sample_format() != SampleFormat::F32 || range.channels() > 2 {
+            if !crate::devices::output_convertible(range.sample_format()) {
                 continue;
             }
-            // Aim for 48 kHz (or the nearest rate the range allows).
             let rate = default_rate_hint().clamp(range.min_sample_rate(), range.max_sample_rate());
             let cost = rate.abs_diff(default_rate_hint());
-            if best.as_ref().is_none_or(|(_, best_cost)| cost < *best_cost) {
-                best = Some((range.with_sample_rate(rate), cost));
+            // Rank: format quality first, then rate proximity, then fewer
+            // channels (mono/stereo suits a voice tool and the FIFO map).
+            let rank = (
+                format_rank(range.sample_format()),
+                cost,
+                u32::from(range.channels()),
+            );
+            if best.as_ref().is_none_or(|(_, best_rank)| rank < *best_rank) {
+                best = Some((range.with_sample_rate(rate), rank));
             }
         }
         let (supported, _) = best.ok_or_else(|| {
             AudioError::UnsupportedConfig(
-                "output device offers no f32 mono/stereo configuration".into(),
+                "output device offers no configuration mvl-audio can drive".into(),
             )
         })?;
         let output_rate = supported.sample_rate();
@@ -100,67 +122,49 @@ impl Player {
         }));
 
         let stream = {
-            let shared = Arc::clone(&shared);
-            let error_shared = Arc::clone(&shared);
-            let out_channels = output_channels;
-            device
-                .build_output_stream(
-                    supported.config(),
-                    move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                        let Ok(mut state) = shared.lock() else {
-                            data.fill(0.0);
-                            return;
-                        };
-                        // Zero-fill first: stopped/paused output is silence.
-                        data.fill(0.0);
-                        if state.transport != Transport::Playing {
-                            return;
-                        }
-                        // Streaming preview source (Phase 6): pull mono
-                        // frames from the FIFO and map 1→N. The player-state
-                        // lock is released before the (brief) FIFO lock to
-                        // keep callback contention minimal.
-                        if let Some(fifo) = state.fifo.clone() {
-                            drop(state);
-                            let frames = fifo.pull_mono_into(data, u32::from(out_channels));
-                            if frames == 0
-                                && fifo.total_frames() > 0
-                                && fifo.read_frame() >= fifo.total_frames()
-                            {
-                                // End of material: stop (the cursor stays
-                                // where playback ended — no rewind on a
-                                // stream).
-                                if let Ok(mut st) = shared.lock() {
-                                    st.transport = Transport::Stopped;
-                                }
-                            }
-                            return;
-                        }
-                        let Some(buffer) = state.buffer.clone() else {
-                            return;
-                        };
-                        let written = copy_into_output(
-                            &buffer,
-                            state.position,
-                            data,
-                            u32::from(out_channels),
-                        );
-                        state.position += written;
-                        if written == 0 || state.position >= buffer.frames() {
-                            // End of material: stop, reset cursor.
-                            state.transport = Transport::Stopped;
-                            state.position = 0;
-                        }
-                    },
-                    move |err| {
-                        log::error!("playback stream error: {err}");
-                        if let Ok(mut state) = error_shared.lock() {
-                            state.stream_error = Some(err.to_string());
-                        }
-                    },
-                    None,
-                )
-                .map_err(|e| AudioError::Stream(e.to_string()))?
+            let stream_config = supported.config();
+            match supported.sample_format() {
+                SampleFormat::F32 => build_output_stream::<f32>(
+                    device,
+                    &stream_config,
+                    Arc::clone(&shared),
+                    Arc::clone(&shared),
+                    output_channels,
+                )?,
+                SampleFormat::I32 => build_output_stream::<i32>(
+                    device,
+                    &stream_config,
+                    Arc::clone(&shared),
+                    Arc::clone(&shared),
+                    output_channels,
+                )?,
+                SampleFormat::I16 => build_output_stream::<i16>(
+                    device,
+                    &stream_config,
+                    Arc::clone(&shared),
+                    Arc::clone(&shared),
+                    output_channels,
+                )?,
+                SampleFormat::I8 => build_output_stream::<i8>(
+                    device,
+                    &stream_config,
+                    Arc::clone(&shared),
+                    Arc::clone(&shared),
+                    output_channels,
+                )?,
+                SampleFormat::U8 => build_output_stream::<u8>(
+                    device,
+                    &stream_config,
+                    Arc::clone(&shared),
+                    Arc::clone(&shared),
+                    output_channels,
+                )?,
+                other => {
+                    return Err(AudioError::UnsupportedConfig(format!(
+                        "no output conversion for device format {other:?}"
+                    )));
+                }
+            }
         };
         stream
             .play()
@@ -331,6 +335,151 @@ fn default_rate_hint() -> u32 {
     48_000
 }
 
+/// Ranking for the output negotiation: f32 first, then the wide integers,
+/// then the rest (mirrors `devices::format_rank` for display).
+fn format_rank(format: SampleFormat) -> u8 {
+    match format {
+        SampleFormat::F32 => 0,
+        SampleFormat::I32 => 1,
+        SampleFormat::I16 => 2,
+        SampleFormat::U8 => 3,
+        SampleFormat::I8 => 4,
+        _ => 9,
+    }
+}
+
+/// Conversion from the internal `f32` domain to the device's output sample
+/// type (full-scale aware, hard-clamped — the DSP must never emit beyond
+/// ±1.0 into an integer device).
+pub trait FromF32: Copy {
+    fn from_f32(value: f32) -> Self;
+}
+
+impl FromF32 for f32 {
+    fn from_f32(value: f32) -> Self {
+        value
+    }
+}
+
+impl FromF32 for i32 {
+    fn from_f32(value: f32) -> Self {
+        (value.clamp(-1.0, 1.0) * 2_147_483_647.0) as i32
+    }
+}
+
+impl FromF32 for i16 {
+    fn from_f32(value: f32) -> Self {
+        (value.clamp(-1.0, 1.0) * 32_767.0) as i16
+    }
+}
+
+impl FromF32 for i8 {
+    fn from_f32(value: f32) -> Self {
+        (value.clamp(-1.0, 1.0) * 127.0) as i8
+    }
+}
+
+impl FromF32 for u8 {
+    fn from_f32(value: f32) -> Self {
+        (value.clamp(-1.0, 1.0) * 127.0 + 128.0) as u8
+    }
+}
+
+/// Builds an output stream in the device's own sample format `T`. The
+/// transport state machine and the channel mapping live in the `f32`
+/// domain (a reused scratch buffer, zero per-callback allocation after
+/// warm-up); the final conversion to `T` clamps.
+fn build_output_stream<T>(
+    device: &Device,
+    config: &StreamConfig,
+    shared: Arc<Mutex<PlayState>>,
+    error_shared: Arc<Mutex<PlayState>>,
+    out_channels: u16,
+) -> Result<Stream>
+where
+    T: cpal::SizedSample + FromF32 + Send + 'static,
+{
+    let mut scratch: Vec<f32> = Vec::new();
+    device
+        .build_output_stream(
+            *config,
+            move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
+                let ch = usize::from(out_channels.max(1));
+                let out_frames = data.len() / ch;
+
+                // Snapshot under a brief lock, then render outside it (the
+                // RT callback never holds the state lock across the FIFO
+                // pull — Phase 6 contract).
+                let snapshot = {
+                    let Ok(state) = shared.lock() else {
+                        data.fill(T::from_f32(0.0));
+                        return;
+                    };
+                    if state.transport != Transport::Playing {
+                        data.fill(T::from_f32(0.0));
+                        return;
+                    }
+                    (state.fifo.clone(), state.buffer.clone(), state.position)
+                };
+
+                scratch.clear();
+                scratch.resize(out_frames * ch, 0.0);
+
+                let mut fifo_done = false;
+                let mut buffer_written: Option<usize> = None;
+                let fifo_source = snapshot.0.is_some();
+                match snapshot.0 {
+                    // Streaming preview: the FIFO pull maps mono → N.
+                    Some(fifo) => {
+                        let frames = fifo.pull_mono_into(&mut scratch, u32::from(out_channels));
+                        fifo_done = frames == 0
+                            && fifo.total_frames() > 0
+                            && fifo.read_frame() >= fifo.total_frames();
+                    }
+                    None => {
+                        if let Some(buffer) = snapshot.1.clone() {
+                            buffer_written = Some(copy_into_output(
+                                &buffer,
+                                snapshot.2,
+                                &mut scratch,
+                                u32::from(out_channels),
+                            ));
+                        }
+                    }
+                }
+
+                // Convert into the device's sample domain (clamped).
+                for (dst, src) in data.iter_mut().zip(scratch.iter()) {
+                    *dst = T::from_f32(*src);
+                }
+
+                // Publish transport transitions under a short lock.
+                if let Ok(mut state) = shared.lock() {
+                    if fifo_source {
+                        if fifo_done {
+                            state.transport = Transport::Stopped;
+                        }
+                    } else if let Some(written) = buffer_written {
+                        state.position = snapshot.2 + written;
+                        let frames = snapshot.1.as_ref().map_or(0, |b| b.frames());
+                        if written == 0 || snapshot.2 + written >= frames {
+                            state.transport = Transport::Stopped;
+                            state.position = 0;
+                        }
+                    }
+                }
+            },
+            move |err| {
+                log::error!("playback stream error: {err}");
+                if let Ok(mut state) = error_shared.lock() {
+                    state.stream_error = Some(err.to_string());
+                }
+            },
+            None,
+        )
+        .map_err(|e| AudioError::Stream(e.to_string()))
+}
+
 /// Copies frames from `buffer` starting at `start_frame` into the
 /// interleaved output slice, mapping channels. Pure and unit-tested.
 ///
@@ -386,6 +535,32 @@ pub fn copy_into_output(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_conversions_are_full_scale_aware_and_clamped() {
+        assert_eq!(0.5f32, f32::from_f32(0.5));
+        assert_eq!(32_767i16, i16::from_f32(1.0));
+        assert_eq!(-32_767i16, i16::from_f32(-1.0));
+        assert_eq!(i16::from_f32(2.0), 32_767, "over-range must clamp");
+        assert_eq!(i16::from_f32(-2.0), -32_767);
+        assert_eq!(2_147_483_647i32, i32::from_f32(1.0));
+        assert_eq!(127i8, i8::from_f32(1.0));
+        assert_eq!(-127i8, i8::from_f32(-1.0));
+        assert_eq!(255u8, u8::from_f32(1.0));
+        assert_eq!(1u8, u8::from_f32(-1.0));
+        assert_eq!(128u8, u8::from_f32(0.0), "silence is mid-scale");
+        assert_eq!(0i32, i32::from_f32(0.0));
+    }
+
+    #[test]
+    fn integer_output_formats_survive_a_round_trip_to_f32() {
+        // i16 path: convert to f32 and back stays within one LSB.
+        for v in [-1.0f32, -0.5, 0.0, 0.25, 1.0] {
+            let as_i16 = i16::from_f32(v);
+            let back = f32::from(as_i16) / 32_767.0;
+            assert!((back - v).abs() < 1.0 / 32_767.0, "v={v} back={back}");
+        }
+    }
 
     #[test]
     fn mono_to_stereo_duplicates() {

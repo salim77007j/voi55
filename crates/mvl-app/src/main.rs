@@ -17,6 +17,25 @@ use slint::ComponentHandle;
 use std::time::{Duration, Instant};
 
 fn main() {
+    // Phase 7 ISSUE 3: panics must be observable. The default hook already
+    // prints to stderr; this adds the thread name context and keeps the
+    // message in one place for the (future) log file.
+    std::panic::set_hook(Box::new(|info| {
+        let thread = std::thread::current();
+        let name = thread.name().unwrap_or("<unnamed>");
+        let payload = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| (*s).to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "unknown panic payload".to_string());
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_else(|| "?".to_string());
+        eprintln!("panic in thread '{name}' at {location}: {payload}");
+    }));
+
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--screenshot") {
         if let Err(err) = screenshot_mode(&args) {
@@ -102,6 +121,12 @@ fn screenshot_mode(args: &[String]) -> Result<(), String> {
             // Same property the export button toggles (no-fake-UI).
             app.window().set_export_open(true);
         }
+        if parsed.devices {
+            // Same property the devices button toggles, plus the real
+            // enumeration the open handler runs (no-fake-UI).
+            app.window().set_devices_open(true);
+            app.refresh_devices();
+        }
         Ok(())
     })?;
     println!("Screenshot written: {}", parsed.out.display());
@@ -144,6 +169,24 @@ fn report_inputs() {
             }
         }
         Err(err) => println!("Audio device enumeration failed: {err}"),
+    }
+    match mvl_audio::list_output_devices() {
+        Ok(devices) if devices.is_empty() => println!("No output devices found on this system."),
+        Ok(devices) => {
+            for d in &devices {
+                let formats = d
+                    .formats
+                    .iter()
+                    .map(|f| format!("{f:?}"))
+                    .collect::<Vec<_>>()
+                    .join("/");
+                println!(
+                    "  output: {} (max {} Hz, {})",
+                    d.name, d.max_sample_rate, formats
+                );
+            }
+        }
+        Err(err) => println!("Output device enumeration failed: {err}"),
     }
 }
 
