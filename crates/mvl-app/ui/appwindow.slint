@@ -10,7 +10,8 @@
 
 import { Tokens } from "tokens.slint";
 import { WaveformPanel } from "waveform-panel.slint";
-import { WaveformPanel } from "waveform-panel.slint";
+import { PrecisionSlider } from "precision-slider.slint";
+import { Icons, IconButton } from "icons.slint";
 
 import "../../../assets/fonts/Inter-Regular.ttf";
 import "../../../assets/fonts/Inter-Medium.ttf";
@@ -54,6 +55,9 @@ export component AppWindow inherits Window {
     in property <string> track-label;
     in property <string> zoom-label;
     in property <float> playhead-frac: -1.0;
+    in property <bool> preview-mode: false;
+    in property <bool> can-preview: false;
+    callback toggle-preview();
     callback wave-zoom(factor: float, anchor-frac: float);
     callback wave-pan(delta-frac: float);
     callback wave-fit();
@@ -61,6 +65,23 @@ export component AppWindow inherits Window {
     // Viewport size of the waveform panel (two-way from the panel).
     out property <length> view-width <=> wfpanel.view-width;
     out property <length> view-height <=> wfpanel.view-height;
+
+    // ── Engine parameters (the three sliders, brief §B) ──────────
+    // Values echo the canonical snapped grid from EngineParams.
+    in property <bool> has-project: false;
+    in-out property <float> pitch-value;
+    in-out property <float> air-value;
+    in-out property <float> formant-value;
+    in property <string> pitch-readout;
+    in property <string> air-readout;
+    in property <string> formant-readout;
+    callback pitch-changed(float);
+    callback air-changed(float);
+    callback formant-changed(float);
+    // Slider labels (i18n, 4.5).
+    in property <string> t-pitch;
+    in property <string> t-air;
+    in property <string> t-formant;
 
     VerticalLayout {
         spacing: 0;
@@ -124,10 +145,79 @@ export component AppWindow inherits Window {
                     track-label: root.track-label;
                     zoom-label: root.zoom-label;
                     playhead-frac: root.playhead-frac;
+                    preview-mode: root.preview-mode;
+                    can-preview: root.can-preview;
+                    toggle-preview() => { root.toggle-preview(); }
                     zoom(f, a) => { root.wave-zoom(f, a); }
                     pan(d) => { root.wave-pan(d); }
                     fit() => { root.wave-fit(); }
                     viewport-changed() => { root.wave-viewport-changed(); }
+                }
+            }
+        }
+
+        Rectangle {
+            height: 1px;
+            background: Tokens.border-subtle;
+        }
+
+        // ── Parameter row: the three precision sliders (brief §B) ────
+        // Order note: the row is declared pitch → air → formant; in RTL
+        // each slider's layout-order mirrors the whole row (4.5).
+        Rectangle {
+            height: 108px;
+            background: Tokens.bg-base;
+
+            HorizontalLayout {
+                padding: Tokens.sp-1;
+                spacing: Tokens.sp-1;
+
+                pitch := PrecisionSlider {
+                    layout-order: root.rtl ? 2 : 0;
+                    label: root.t-pitch;
+                    unit: "st";
+                    min: -12.0;
+                    max: 12.0;
+                    step: 0.01;
+                    coarse-step: 1.0;
+                    neutral: 0.0;
+                    accent: Tokens.accent-pitch;
+                    readout: root.pitch-readout;
+                    enabled: root.has-project;
+                    value <=> root.pitch-value;
+                    changed(v) => { root.pitch-changed(v); }
+                }
+
+                air := PrecisionSlider {
+                    layout-order: root.rtl ? 1 : 1;
+                    label: root.t-air;
+                    unit: "dB";
+                    min: -24.0;
+                    max: 12.0;
+                    step: 0.1;
+                    coarse-step: 1.0;
+                    neutral: 0.0;
+                    accent: Tokens.accent-air;
+                    readout: root.air-readout;
+                    enabled: root.has-project;
+                    value <=> root.air-value;
+                    changed(v) => { root.air-changed(v); }
+                }
+
+                formant := PrecisionSlider {
+                    layout-order: root.rtl ? 0 : 2;
+                    label: root.t-formant;
+                    unit: "mm";
+                    min: 130.0;
+                    max: 190.0;
+                    step: 1.0;
+                    coarse-step: 10.0;
+                    neutral: 175.0;
+                    accent: Tokens.accent-formant;
+                    readout: root.formant-readout;
+                    enabled: root.has-project;
+                    value <=> root.formant-value;
+                    changed(v) => { root.formant-changed(v); }
                 }
             }
         }

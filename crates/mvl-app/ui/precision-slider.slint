@@ -1,0 +1,169 @@
+// Copyright © salim77007j
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+// Precision slider (D13): studio-hardware look with keyboard-grade
+// resolution. The widget owns interaction; the Rust bridge owns the value
+// grid (EngineParams clamps/snaps and echoes the canonical value back).
+//
+// Interaction contract:
+// - drag anywhere on the track → continuous value (snapped on echo)
+// - double-click → neutral (0 st / 0 dB / 175 mm)
+// - Left/Right (or Up/Down) arrows → one step (1 ¢ / 0.1 dB / 1 mm)
+// - PageUp/PageDown → a "coarse" step (1 st / 1 dB / 10 mm)
+// - 2 px focus ring, hover +4 % / press +8 % surface lightness
+
+import { Tokens } from "tokens.slint";
+
+export component PrecisionSlider inherits Rectangle {
+    border-radius: Tokens.radius-md;
+    background: touch.pressed ? Tokens.bg-elevated-press
+        : touch.has-hover ? Tokens.bg-elevated-hover
+        : Tokens.bg-elevated;
+    animate background { duration: Tokens.anim-fast; easing: Tokens.motion; }
+
+    // ── Configuration ────────────────────────────────────────────────
+    in property <string> label;
+    in property <string> unit;
+    in property <float> min;
+    in property <float> max;
+    in property <float> step;
+    in property <float> coarse-step;
+    in property <float> neutral;
+    /// Glyph color (D13 accent per parameter).
+    in property <color> accent;
+    /// Formatted readout, owned by the Rust bridge (canonical grid).
+    in property <string> readout;
+    /// Disabled until a project is loaded.
+    in property <bool> enabled: true;
+
+    // ── Value ────────────────────────────────────────────────────────
+    in-out property <float> value: self.neutral;
+    callback changed(float);
+
+    property <float> span: self.max - self.min;
+
+    focus-ring := FocusScope {
+        key-pressed(e) => {
+            if (!root.enabled) {
+                return reject;
+            }
+            if (e.text == Key.LeftArrow || e.text == Key.DownArrow) {
+                root.value = Math.max(root.min, root.value - root.step);
+                root.changed(root.value);
+                return accept;
+            }
+            if (e.text == Key.RightArrow || e.text == Key.UpArrow) {
+                root.value = Math.min(root.max, root.value + root.step);
+                root.changed(root.value);
+                return accept;
+            }
+            if (e.text == Key.PageDown) {
+                root.value = Math.max(root.min, root.value - root.coarse-step);
+                root.changed(root.value);
+                return accept;
+            }
+            if (e.text == Key.PageUp) {
+                root.value = Math.min(root.max, root.value + root.coarse-step);
+                root.changed(root.value);
+                return accept;
+            }
+            reject
+        }
+
+        // ── Track ────────────────────────────────────────────────────
+        VerticalLayout {
+            padding: Tokens.sp-1;
+            spacing: Tokens.sp-half;
+
+            // Label + value readout.
+            HorizontalLayout {
+                height: 18px;
+                spacing: Tokens.sp-half;
+
+                Text {
+                    text: root.label;
+                    color: Tokens.text-muted;
+                    vertical-alignment: center;
+                }
+
+                Rectangle {} // spring
+
+                Text {
+                    text: root.readout;
+                    color: Tokens.text-primary;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
+            }
+
+            Rectangle { // groove area
+                Rectangle {
+                    y: (parent.height - 4px) / 2;
+                    height: 4px;
+                    border-radius: 2px;
+                    background: Tokens.bg-base;
+
+                    Rectangle { // fill
+                        x: 0;
+                        width: Math.max(
+                            0px,
+                            Math.min(
+                                parent.width,
+                                (root.value - root.min) / root.span * parent.width
+                            )
+                        );
+                        height: parent.height;
+                        border-radius: 2px;
+                        background: root.accent;
+                    }
+
+                    thumb := Rectangle { // thumb
+                        x: Math.max(
+                            -7px,
+                            Math.min(
+                                parent.width - 7px,
+                                (root.value - root.min) / root.span * parent.width - 7px
+                            )
+                        );
+                        y: (parent.height - self.height) / 2;
+                        width: 14px;
+                        height: 14px;
+                        border-radius: 7px;
+                        background: Tokens.text-primary;
+                        border-width: 2px;
+                        border-color: root.accent;
+                    }
+                }
+
+                height: 28px;
+
+                touch := TouchArea {
+                    enabled: root.enabled;
+                    // Drag anywhere on the groove.
+                    moved => {
+                        if (self.pressed) {
+                            root.value = root.min +
+                                Math.max(0.0, Math.min(1.0, self.mouse-x / parent.width))
+                                * root.span;
+                            root.changed(root.value);
+                        }
+                    }
+                    // Double-click resets to neutral.
+                    double-clicked => {
+                        root.value = root.neutral;
+                        root.changed(root.value);
+                    }
+                    // Click jumps the thumb to the pointer.
+                    pointer-event(e) => {
+                        if (e.kind == PointerEventKind.down) {
+                            root.value = root.min +
+                                Math.max(0.0, Math.min(1.0, self.mouse-x / parent.width))
+                                * root.span;
+                            root.changed(root.value);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

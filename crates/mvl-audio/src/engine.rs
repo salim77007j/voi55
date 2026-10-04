@@ -10,6 +10,7 @@
 use crate::buffer::AudioBuffer;
 use crate::error::{AudioError, Result};
 use mvl_core::engine::EngineParams;
+use mvl_core::pyin::PyinResult;
 
 /// Equal-weight mono downmix of `buf` (the engine's input domain).
 ///
@@ -33,6 +34,41 @@ pub fn downmix_mono(buf: &AudioBuffer) -> Vec<f32> {
     mono
 }
 
+/// Renders an already-downmixed mono signal and restores `channels`.
+///
+/// This is the UI preview seam: the mono domain lives in the session
+/// (`Arc`-shared with the waveform display), the pYIN track is the one
+/// cached analysis, and the returned buffer carries the original channel
+/// layout. When `track` is `None` a fresh analysis runs.
+///
+/// # Errors
+/// Fails when the engine reports an analysis/FFT error.
+pub fn render_mono_to_buffer(
+    mono: &[f32],
+    sample_rate: u32,
+    channels: u16,
+    params: &EngineParams,
+    track: Option<&PyinResult>,
+) -> Result<AudioBuffer> {
+    if channels == 0 {
+        return Err(AudioError::UnsupportedConfig(
+            "buffer has no channels".into(),
+        ));
+    }
+    let (rendered, _report) = match track {
+        Some(t) => mvl_core::pipeline::render_with_track(mono, sample_rate, params, t)?,
+        None => {
+            let (rendered, _t, report) = mvl_core::pipeline::render(mono, sample_rate, params)?;
+            (rendered, report)
+        }
+    };
+    let mut out_samples = Vec::with_capacity(rendered.len() * usize::from(channels));
+    for s in &rendered {
+        out_samples.extend(std::iter::repeat_n(*s, usize::from(channels)));
+    }
+    AudioBuffer::from_interleaved(sample_rate, channels, out_samples)
+}
+
 /// Renders `buf` offline with the Micro-Vocal Lab engine (D11 order:
 /// pitch → formant → air).
 ///
@@ -42,22 +78,8 @@ pub fn downmix_mono(buf: &AudioBuffer) -> Vec<f32> {
 /// # Errors
 /// Fails when the engine reports an analysis/FFT error.
 pub fn render_offline(buf: &AudioBuffer, params: &EngineParams) -> Result<AudioBuffer> {
-    let channels = usize::from(buf.channels());
-    if channels == 0 {
-        return Err(AudioError::UnsupportedConfig(
-            "buffer has no channels".into(),
-        ));
-    }
-
     let mono = downmix_mono(buf);
-    let (rendered, _track, _report) = mvl_core::pipeline::render(&mono, buf.sample_rate(), params)?;
-
-    // Map back to the original channel layout.
-    let mut out_samples = Vec::with_capacity(rendered.len() * channels);
-    for s in &rendered {
-        out_samples.extend(std::iter::repeat_n(*s, channels));
-    }
-    AudioBuffer::from_interleaved(buf.sample_rate(), buf.channels(), out_samples)
+    render_mono_to_buffer(&mono, buf.sample_rate(), buf.channels(), params, None)
 }
 
 #[cfg(test)]
@@ -75,6 +97,20 @@ mod tests {
             interleaved.push(*s);
         }
         AudioBuffer::from_interleaved(sr, 2, interleaved).expect("stereo buffer")
+    }
+
+    #[test]
+    fn cached_track_render_matches_full_render() {
+        let sr = 48_000u32;
+        let buf = stereo_vowel(sr);
+        let mut params = EngineParams::default();
+        params.set_pitch_semitones(2.0);
+
+        let full = render_offline(&buf, &params).expect("full");
+        let mono = downmix_mono(&buf);
+        let track = mvl_core::pyin::pyin(&mono, sr).expect("pyin");
+        let cached = render_mono_to_buffer(&mono, sr, 2, &params, Some(&track)).expect("cached");
+        assert_eq!(full, cached);
     }
 
     #[test]

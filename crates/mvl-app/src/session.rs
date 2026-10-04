@@ -7,17 +7,19 @@
 
 use crate::waveform::{View, WaveformPyramid};
 use mvl_audio::AudioBuffer;
+use std::sync::Arc;
 
 /// A loaded project.
 pub struct Session {
     pub name: String,
     pub buffer: AudioBuffer,
-    /// Mono display/analysis domain (engine input).
-    pub mono: Vec<f32>,
+    /// Mono display/analysis domain (engine input). `Arc`-shared with the
+    /// background render thread so slider re-renders copy nothing.
+    pub mono: Arc<Vec<f32>>,
     pub pyramid: WaveformPyramid,
     /// Shared pYIN track (`None` when analysis was skipped or failed —
-    /// the failure is surfaced, not hidden).
-    pub track: Option<mvl_core::pyin::PyinResult>,
+    /// the failure is surfaced, not hidden). `Arc` for the same reason.
+    pub track: Option<Arc<mvl_core::pyin::PyinResult>>,
     pub track_error: Option<String>,
     pub view: View,
 }
@@ -27,11 +29,11 @@ impl Session {
     /// false) the pYIN track. Analysis errors are recorded, never fatal —
     /// the waveform still displays.
     pub fn load(buffer: AudioBuffer, name: impl Into<String>, analyze: bool) -> Self {
-        let mono = mvl_audio::engine::downmix_mono(&buffer);
+        let mono = Arc::new(mvl_audio::engine::downmix_mono(&buffer));
         let pyramid = WaveformPyramid::build(&mono, buffer.sample_rate());
         let (track, track_error) = if analyze {
             match mvl_core::pyin::pyin(&mono, buffer.sample_rate()) {
-                Ok(t) => (Some(t), None),
+                Ok(t) => (Some(Arc::new(t)), None),
                 Err(e) => (None, Some(e.to_string())),
             }
         } else {

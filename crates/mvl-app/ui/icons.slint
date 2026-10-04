@@ -74,3 +74,40 @@ export component IconButton inherits Rectangle {
 
     animate background { duration: Tokens.anim-fast; easing: Tokens.motion; }
 }
+
+// Text chip button (same chrome as IconButton, label instead of a glyph).
+export component ChipButton inherits Rectangle {
+    width: 28px;
+    height: 28px;
+    border-radius: Tokens.radius-sm;
+    background: touch.pressed ? Tokens.bg-elevated-press
+        : touch.has-hover ? Tokens.bg-elevated-hover
+        : transparent;
+
+    in property <string> label;
+    in property <bool> enabled: true;
+    in property <bool> active: false;
+    callback clicked;
+
+    opacity: root.enabled ? 1.0 : 0.4;
+    border-width: 1px;
+    border-color: root.active ? Tokens.accent-formant : transparent;
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+
+    Text {
+        text: root.label;
+        font-size: 10px;
+        font-weight: 600;
+        color: Tokens.text-primary;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        width: parent.width;
+        height: parent.height;
+    }
+
+    animate background { duration: Tokens.anim-fast; easing: Tokens.motion; }
+}

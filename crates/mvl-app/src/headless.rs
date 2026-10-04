@@ -16,26 +16,43 @@ use slint::platform::software_renderer::{
     MinimalSoftwareWindow, PremultipliedRgbaColor, RepaintBufferType,
 };
 use slint::platform::{Platform, PlatformError, WindowAdapter};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 
+thread_local! {
+    /// The installed headless platform. Slint installs a platform once per
+    /// thread; subsequent renders swap in a fresh window instead.
+    static PLATFORM: RefCell<Option<Rc<HeadlessPlatform>>> = const { RefCell::new(None) };
+}
+
 /// A platform that renders into a pixel buffer with a virtual clock.
 struct HeadlessPlatform {
-    window: Rc<MinimalSoftwareWindow>,
+    window: RefCell<Rc<MinimalSoftwareWindow>>,
     /// Virtual milliseconds; advances 16 ms per `duration_since_start` call
     /// (one animation tick per spin of the render loop).
     clock_ms: Cell<u64>,
 }
 
-impl Platform for HeadlessPlatform {
+impl HeadlessPlatform {
+    /// Makes `window` the adapter handed to the next `AppWindow::new()`.
+    fn install_window(&self, window: Rc<MinimalSoftwareWindow>) {
+        *self.window.borrow_mut() = window;
+    }
+}
+
+/// `Box<dyn Platform>` owner that delegates to the shared inner platform
+/// (the thread-local keeps an `Rc` so later renders can swap windows).
+struct SharedHeadless(Rc<HeadlessPlatform>);
+
+impl Platform for SharedHeadless {
     fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, PlatformError> {
-        Ok(self.window.clone())
+        Ok(self.0.window.borrow().clone())
     }
 
     fn duration_since_start(&self) -> std::time::Duration {
-        let next = self.clock_ms.get() + 16;
-        self.clock_ms.set(next);
+        let next = self.0.clock_ms.get() + 16;
+        self.0.clock_ms.set(next);
         std::time::Duration::from_millis(next)
     }
 }
@@ -54,6 +71,12 @@ pub struct ScreenshotArgs {
     pub playhead: Option<f64>,
     /// `--window SECS` — visible time span (zoom state).
     pub window_secs: Option<f64>,
+    /// `--pitch ST` / `--air DB` / `--formant MM` — engine parameters.
+    pub pitch: Option<f64>,
+    pub air: Option<f64>,
+    pub formant: Option<f64>,
+    /// `--preview` — show the A/B preview view instead of the original.
+    pub preview: bool,
 }
 
 /// Parses `--screenshot --out PATH [flags]`.
@@ -71,10 +94,15 @@ pub fn parse_args(args: &[String]) -> Result<ScreenshotArgs, String> {
     let mut open = None;
     let mut playhead = None;
     let mut window_secs = None;
+    let mut pitch = None;
+    let mut air = None;
+    let mut formant = None;
+    let mut preview = false;
     let mut it = args.iter().map(String::as_str);
     while let Some(a) = it.next() {
         match a {
             "--screenshot" => {} // mode selector, already consumed
+            "--preview" => preview = true,
             "--out" => out = it.next().map(PathBuf::from),
             "--width" => {
                 width = it
@@ -104,6 +132,27 @@ pub fn parse_args(args: &[String]) -> Result<ScreenshotArgs, String> {
                         .ok_or("--window needs seconds")?,
                 )
             }
+            "--pitch" => {
+                pitch = Some(
+                    it.next()
+                        .and_then(|v| v.parse().ok())
+                        .ok_or("--pitch needs semitones")?,
+                )
+            }
+            "--air" => {
+                air = Some(
+                    it.next()
+                        .and_then(|v| v.parse().ok())
+                        .ok_or("--air needs dB")?,
+                )
+            }
+            "--formant" => {
+                formant = Some(
+                    it.next()
+                        .and_then(|v| v.parse().ok())
+                        .ok_or("--formant needs millimetres")?,
+                )
+            }
             other => return Err(format!("unknown screenshot flag: {other}")),
         }
     }
@@ -115,6 +164,10 @@ pub fn parse_args(args: &[String]) -> Result<ScreenshotArgs, String> {
         open,
         playhead,
         window_secs,
+        pitch,
+        air,
+        formant,
+        preview,
     })
 }
 
@@ -127,11 +180,22 @@ pub fn render_to_png(
     populate: impl FnOnce(&crate::app::App) -> Result<(), String>,
 ) -> Result<(), String> {
     let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
-    slint::platform::set_platform(Box::new(HeadlessPlatform {
-        window: Rc::clone(&window),
-        clock_ms: Cell::new(0),
-    }))
-    .map_err(|e| format!("platform already initialised: {e}"))?;
+    PLATFORM.with(|slot| -> Result<(), String> {
+        let mut installed = slot.borrow_mut();
+        match installed.as_ref() {
+            Some(p) => p.install_window(Rc::clone(&window)),
+            None => {
+                let inner = Rc::new(HeadlessPlatform {
+                    window: RefCell::new(Rc::clone(&window)),
+                    clock_ms: Cell::new(0),
+                });
+                slint::platform::set_platform(Box::new(SharedHeadless(Rc::clone(&inner))))
+                    .map_err(|e| format!("platform setup failed: {e}"))?;
+                *installed = Some(inner);
+            }
+        }
+        Ok(())
+    })?;
 
     let app = crate::app::App::new().map_err(|e| e.to_string())?;
     window.set_size(slint::PhysicalSize::new(args.width, args.height));

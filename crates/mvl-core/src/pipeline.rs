@@ -16,6 +16,55 @@ use crate::engine::EngineParams;
 use crate::error::Result;
 use crate::pyin::{PyinResult, pyin};
 
+/// Renders `x` (mono) with the three engines in D11 order, reusing a
+/// precomputed pitch track.
+///
+/// This is the UI/preview path: the track comes from the session's single
+/// pYIN analysis (identical to [`render`]'s), so slider re-renders skip
+/// re-analysis entirely. Passing a track computed on the same input makes
+/// the output bit-identical to [`render`].
+///
+/// # Errors
+/// Propagates engine/FFT failures.
+pub fn render_with_track(
+    x: &[f32],
+    sample_rate: u32,
+    params: &EngineParams,
+    track: &PyinResult,
+) -> Result<(Vec<f32>, RenderReport)> {
+    let mut samples = x.to_vec();
+    let mut stages = [false; 3];
+
+    // 1. Pitch (TD-PSOLA).
+    let semitones = params.pitch_semitones();
+    if semitones.abs() >= 1e-9 {
+        samples = crate::psola::pitch_shift(&samples, sample_rate, track, semitones);
+        stages[0] = true;
+    }
+
+    // 2. Formant (vocal-tract length).
+    let mm = params.formant_mm();
+    if (mm - crate::engine::REFERENCE_VTL_MM).abs() >= 1e-9 {
+        samples = crate::formant::shift_formants(&samples, sample_rate, track, mm)?;
+        stages[1] = true;
+    }
+
+    // 3. Air / breath.
+    let air_db = params.air_db();
+    if air_db.abs() >= 1e-9 {
+        samples = crate::air::process_air(&samples, sample_rate, track, air_db)?;
+        stages[2] = true;
+    }
+
+    let report = RenderReport {
+        frames_analyzed: track.len(),
+        voiced_ratio: track.voiced_ratio(),
+        median_f0_hz: track.median_f0(),
+        stages_applied: stages,
+    };
+    Ok((samples, report))
+}
+
 /// Summary of one offline render ( surfaced in the UI status bar and in
 /// the validation report).
 #[derive(Debug, Clone, PartialEq)]
@@ -43,37 +92,7 @@ pub fn render(
     params: &EngineParams,
 ) -> Result<(Vec<f32>, PyinResult, RenderReport)> {
     let track = pyin(x, sample_rate)?;
-
-    let mut samples = x.to_vec();
-    let mut stages = [false; 3];
-
-    // 1. Pitch (TD-PSOLA).
-    let semitones = params.pitch_semitones();
-    if semitones.abs() >= 1e-9 {
-        samples = crate::psola::pitch_shift(&samples, sample_rate, &track, semitones);
-        stages[0] = true;
-    }
-
-    // 2. Formant (vocal-tract length).
-    let mm = params.formant_mm();
-    if (mm - crate::engine::REFERENCE_VTL_MM).abs() >= 1e-9 {
-        samples = crate::formant::shift_formants(&samples, sample_rate, &track, mm)?;
-        stages[1] = true;
-    }
-
-    // 3. Air / breath.
-    let air_db = params.air_db();
-    if air_db.abs() >= 1e-9 {
-        samples = crate::air::process_air(&samples, sample_rate, &track, air_db)?;
-        stages[2] = true;
-    }
-
-    let report = RenderReport {
-        frames_analyzed: track.len(),
-        voiced_ratio: track.voiced_ratio(),
-        median_f0_hz: track.median_f0(),
-        stages_applied: stages,
-    };
+    let (samples, report) = render_with_track(x, sample_rate, params, &track)?;
     Ok((samples, track, report))
 }
 
@@ -88,6 +107,24 @@ mod tests {
         let track_f0 = synth::f0_track_const(160.0, sr as usize);
         let mut rng = Rng::new(71);
         synth::vowel(&track_f0, sr, &VowelSpec::default(), &mut rng)
+    }
+
+    #[test]
+    fn render_with_track_matches_full_render() {
+        // The preview path (cached track) must be bit-identical to the
+        // quality-maximal offline path when given the same track.
+        let sr = 48_000u32;
+        let x = vowel_fixture(sr);
+        let mut params = EngineParams::default();
+        params.set_pitch_semitones(2.0);
+        params.set_formant_mm(140.0);
+        params.set_air_db(3.0);
+
+        let (full, track, report_full) = render(&x, sr, &params).expect("render");
+        let (cached, report_cached) =
+            render_with_track(&x, sr, &params, &track).expect("render_with_track");
+        assert_eq!(full, cached);
+        assert_eq!(report_full, report_cached);
     }
 
     #[test]

@@ -101,6 +101,16 @@ fn screenshot_mode(args: &[String]) -> Result<(), String> {
         if let Some(secs) = parsed.playhead {
             app.set_playhead(secs);
         }
+        if parsed.pitch.is_some() || parsed.air.is_some() || parsed.formant.is_some() {
+            app.set_params_and_render(
+                parsed.pitch.unwrap_or(0.0),
+                parsed.air.unwrap_or(0.0),
+                parsed.formant.unwrap_or(175.0),
+            );
+        }
+        if parsed.preview {
+            app.toggle_preview();
+        }
         Ok(())
     })?;
     println!("Screenshot written: {}", parsed.out.display());
