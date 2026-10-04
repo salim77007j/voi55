@@ -16,7 +16,7 @@ homepage = "https://github.com/salim77007j/voi55"
 cpal = "0.18"
 # File containers / codecs
 hound = "3.5"
-symphonia = { version = "0.6", default-features = false, features = ["mp3"] }
+symphonia = { version = "0.5.5", default-features = false, features = ["mp3"] }
 mp3lame-encoder = "0.2"
 # DSP primitives (D6)
 realfft = "3"
