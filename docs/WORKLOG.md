@@ -108,3 +108,59 @@ round-trip unit tests. Commit after each sub-item.
   AR RTL demo/export).
 - Quality at HEAD: 97 tests green (50 core + 33 audio + 14 app incl. 4-step
   screenshot integration); fmt + clippy `-D warnings` clean workspace-wide.
+
+## 2026-10-04 — Phase 5.1/5.1b: CI matrix + nightly memory checks
+
+- **5.1 (8f48ce2)** `.github/workflows/ci.yml`: 3-OS matrix (ubuntu/windows/
+  macos), fmt+clippy(-D warnings)+build+test per target, headless UI smoke on
+  Linux with screenshot artifact. **Fix (57237ab):** Linux runners also need
+  `libfontconfig1-dev` (Slint font system) — first run failed on
+  `yeslogic-fontconfig-sys`. Matrix green on all three OS.
+- **5.1b (bde079c)** `.github/workflows/nightly.yml` (schedule + dispatch):
+  ASan `cargo test -p mvl-core -p mvl-audio` + Valgrind memcheck of the real
+  headless app run. **Fixes (57237ab/808aadd):** sanitizer must be scoped to
+  the target triple (`CARGO_TARGET_*_RUSTFLAGS` + `--target`) because
+  proc-macros cannot be instrumented; valgrind suppressions for third-party
+  fontconfig charset caches (592 B definite, all via FcCharSetAddChar —
+  documented in `.github/valgrind-suppress.supp`). ASan: all tests pass, zero
+  first-party leaks.
+
+## 2026-10-04 — Phase 5.2: release artifacts workflow
+
+- **5.2 (73b79df)** `.github/workflows/release.yml`: 3-OS stripped release
+  builds; gates = binary *runs* headlessly + `< 50 MB` size check; bundle =
+  binary + README + LICENSE; GH Release on `v*` tags. **Fix (808aadd):**
+  Windows bundle via PowerShell `Compress-Archive` (runners ship no `zip`).
+- **Amendment (D14):** the "criterion benchmark in mvl-core" plan item is
+  fulfilled by `crates/mvl-audio/examples/bench_render.rs` — same measurement
+  (preview DSP load vs the 40 %-of-one-core budget), no extra dependency,
+  exits non-zero on budget miss. The valgrind check moved from "local sandbox"
+  to the nightly CI job (sandbox has no valgrind and no root); run logs are the
+  recorded evidence.
+
+## 2026-10-04 — Phase 5.3: runtime verification forced RAM-budget fixes
+
+- First verification: **316 MB peak RSS** on a 3-min 48 kHz stereo session vs
+  the 200 MB budget. Attribution via `crates/mvl-audio/examples/rss_probe.rs`:
+  pYIN per-frame matrices +192 MB; stage scratch (acc/wsum/env + pipeline
+  input copy) +182 MB; stereo preview + duplicate downmix +103 MB.
+- **Fixes (c9ffd3f):** (1) streaming pYIN Viterbi — observation rows consumed
+  per frame, u16 backpointer trellis + per-frame candidate taus retained
+  (−170 MB); (2) new `mvl-core::ola` — `CarryOla` fixed-size ring overlap-add
+  used by all three stages with on-the-fly `EnvStream` voicing envelope;
+  additions per sample in the same order ⇒ bit-identical output (all gates
+  green); (3) pipeline drops the unused `x.to_vec()` working copy; (4) app
+  stores the A/B preview **mono** (Player maps 1→N at output; export keeps the
+  original channel layout) and drops the stale preview before a re-render.
+- **Result: 316 → 196 MB** (all-stages worst case), 146 MB loaded idle,
+  single-stage interactive ≈ 180 MB; mono-session export ≈ 173 MB, stereo
+  ≈ 206 MB (disclosed). Cold start 56–59 ms; binary 23.8 MB; preview render
+  34× real-time = 3 % of one core. Harness committed:
+  `scripts/verify-runtime.sh` + `scripts/make_session_fixture.py` +
+  `MVL_TIMINGS` headless stage timing. Evidence: `docs/evidence/phase5/`.
+- Honest gap recorded in the report: full-file preview round-trip (250 ms
+  debounce + render at 34× real-time) does not meet the brief's < 20 ms
+  streaming-preview target; chunked preview path is Phase 6+ work, the ring
+  OLA is its groundwork.
+- NEXT: Phase 6 — VALIDATION_REPORT.md, real-hardware numbers, native-Arabic
+  reviewer checklist, tag v1.0.0 — awaits the explicit "continue".
