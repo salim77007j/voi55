@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      # ALSA headers are cpal's build dependency on Linux (D15: ubuntu +
+      # ALSA dev packages). Runners have no audio device — the app's
+      # deviceless code paths are the tested behaviour, not a gap.
+      - name: Install ALSA headers (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libasound2-dev
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Build
+        run: cargo build --workspace
+
+      - name: Test
+        run: cargo test --workspace
+
+      # Runtime smoke: the real binary renders a real frame headlessly
+      # (software renderer, no display server) — same code path the
+      # screenshot evidence pipeline and tests/screenshot.rs use.
+      - name: Headless UI smoke
+        if: runner.os == 'Linux'
+        run: |
+          cargo run -p mvl-app -- --screenshot --demo synth --out ci-smoke.png
+          test -s ci-smoke.png
+
+      - name: Upload smoke screenshot
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-smoke-${{ matrix.os }}
+          path: ci-smoke.png
+          if-no-files-found: error
