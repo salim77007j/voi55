@@ -23,6 +23,7 @@
 pub mod engine;
 pub mod error;
 pub mod lpc;
+pub mod psola;
 pub mod pyin;
 pub mod synth;
 
