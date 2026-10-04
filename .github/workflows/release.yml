@@ -1,0 +1,114 @@
+name: Release artifacts
+
+# D15: release artifacts uploaded per platform. Builds the stripped release
+# binary on all three targets, verifies it actually runs (headless render),
+# enforces the < 50 MB binary budget from the brief, and bundles
+# binary + README + LICENSE (GPL-3.0 §4 requires the license copy).
+#
+# Runs on version tags (bundles are attached to a GitHub Release) and on
+# workflow_dispatch (artifact-only verification runs).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            bundle: tar.gz
+            binary: micro-vocal-lab
+          - os: windows-latest
+            bundle: zip
+            binary: micro-vocal-lab.exe
+          - os: macos-latest
+            bundle: tar.gz
+            binary: micro-vocal-lab
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install ALSA headers (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libasound2-dev
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release -p mvl-app
+
+      # Gate: the shipped artifact must run, not just link — renders a real
+      # frame through the headless software renderer.
+      - name: Run the release binary (headless render)
+        shell: bash
+        run: |
+          target/release/${{ matrix.binary }} --screenshot --demo synth \
+            --out smoke-${{ matrix.os }}.png
+          test -s smoke-${{ matrix.os }}.png
+
+      - name: Binary size gate (< 50 MB)
+        shell: bash
+        run: |
+          f="target/release/${{ matrix.binary }}"
+          bytes=$(wc -c < "$f")
+          echo "release binary: ${bytes} bytes"
+          limit=$((50 * 1024 * 1024))
+          if [ "$bytes" -ge "$limit" ]; then
+            echo "FAILED: ${bytes} bytes >= ${limit} bytes (budget: < 50 MB)"
+            exit 1
+          fi
+
+      - name: Bundle (binary + README + LICENSE)
+        shell: bash
+        run: |
+          dir="micro-vocal-lab-${{ matrix.os }}"
+          mkdir "$dir"
+          cp "target/release/${{ matrix.binary }}" "$dir/"
+          cp README.md LICENSE "$dir/"
+          if [ "${{ matrix.bundle }}" = "zip" ]; then
+            zip -r "$dir.zip" "$dir"
+          else
+            tar czf "$dir.tar.gz" "$dir"
+          fi
+
+      - name: Upload bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: micro-vocal-lab-${{ matrix.os }}
+          path: micro-vocal-lab-${{ matrix.os }}.${{ matrix.bundle }}
+          if-no-files-found: error
+
+      - name: Upload smoke screenshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-smoke-${{ matrix.os }}
+          path: smoke-${{ matrix.os }}.png
+          if-no-files-found: error
+
+  github-release:
+    # Attach bundles to the tag's GitHub Release (dispatch runs skip this).
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: dist
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/micro-vocal-lab-*.tar.gz
+            dist/micro-vocal-lab-*.zip
