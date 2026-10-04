@@ -1,16 +1,27 @@
 # Valgrind suppressions for Micro-Vocal Lab (nightly memory-check workflow).
 #
-# Scope: third-party fontconfig charset caches only. The Slint font stack
-# (fontique) asks fontconfig for per-script character sets; fontconfig
-# caches those allocations for the process lifetime and frees them only in
-# FcFini(), which the font stack never calls — the OS reclaims them at
-# exit. Reviewed against the Phase 5 run: 592 B definite + 64 B indirect,
-# every record passing through FcCharSetAddChar. First-party code (DSP,
-# buffers, app state) is leak-free; this gate stays on real regressions.
+# Scope: third-party fontconfig internals only. The Slint font stack
+# (fontique) loads fontconfig once; fontconfig (a) asks for per-script
+# character sets through FcCharSetAddChar and (b) parses its system config
+# XML through libexpat — both allocate caches/trees that fontconfig keeps
+# for the process lifetime and frees only in FcFini(), which the font stack
+# never calls; the OS reclaims them at exit. Reviewed against the Phase 5
+# runs: 336 B definite+indirect in the charset caches, 256 B direct + 64 B
+# indirect in the config-parse tree — zero first-party records. These rules
+# keep the gate on real regressions in Micro-Vocal Lab code (DSP, buffers,
+# app state).
 {
    fontconfig-charset-cache
    Memcheck:Leak
    match-leak-kinds: definite,indirect
    ...
    fun:FcCharSetAddChar
+}
+{
+   fontconfig-config-parse
+   Memcheck:Leak
+   match-leak-kinds: definite,indirect
+   ...
+   fun:XML_ParseBuffer
+   ...
 }
