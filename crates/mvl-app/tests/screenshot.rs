@@ -22,8 +22,12 @@ fn shell_renders_studio_graphite() {
         out: out.clone(),
         width: 1280,
         height: 800,
+        demo: None,
+        open: None,
+        playhead: None,
+        window_secs: None,
     };
-    headless::render_to_png(&args, |_app| {}).expect("headless render");
+    headless::render_to_png(&args, |_app| Ok(())).expect("headless render");
 
     let png = std::fs::read(&out).unwrap_or_else(|e| panic!("png exists: {e}"));
     let decoder = png::Decoder::new(std::io::Cursor::new(png));

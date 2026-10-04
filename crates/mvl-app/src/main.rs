@@ -2,10 +2,9 @@
 //!
 //! Modes:
 //! - **GUI** (default): the Slint window (Studio Graphite) on the platform
-//!   backend (winit/femtovg on desktop).
-//! - `--screenshot --out P [--width N] [--height N]`: renders the real UI
-//!   headlessly into a PNG (evidence pipeline, D14; also drives
-//!   `tests/screenshot.rs`).
+//!   backend (winit/femtovg on desktop). `--open FILE` loads audio first.
+//! - `--screenshot --out P [flags]`: renders the real UI headlessly into a
+//!   PNG (evidence pipeline, D14; also drives `tests/screenshot.rs`).
 //! - `--selftest-audio`: legacy Phase 2 playback self-test, kept for CI.
 //!
 //! All logic lives in the `mvl-app` library; this binary only parses the
@@ -44,24 +43,80 @@ fn main() {
         std::process::exit(1);
     }
 
-    if let Err(err) = gui_mode() {
+    if let Err(err) = gui_mode(&args) {
         eprintln!("GUI failed to start: {err}");
         std::process::exit(1);
     }
 }
 
+/// Loads audio per the CLI flags (`--demo synth` / `--open PATH`).
+fn load_flagged(
+    app: &app::App,
+    demo: Option<&str>,
+    open: Option<&std::path::Path>,
+) -> Result<(), String> {
+    match (demo, open) {
+        (Some("synth"), _) => {
+            let buf = mvl_app::session::demo_vocal().map_err(|e| e.to_string())?;
+            app.load_audio(buf, "demo-vocal (synth)");
+            Ok(())
+        }
+        (Some(other), _) => Err(format!("unknown --demo kind: {other} (only 'synth')")),
+        (_, Some(path)) => {
+            let buffer = load_any(path)?;
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.display().to_string());
+            app.load_audio(buffer, &name);
+            Ok(())
+        }
+        (None, None) => Ok(()),
+    }
+}
+
+/// Import dispatch by extension (used by CLI and, from 4.4 on, dialogs).
+pub fn load_any(path: &std::path::Path) -> Result<AudioBuffer, String> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    match ext.as_str() {
+        "wav" | "wave" => mvl_audio::import_wav(path).map_err(|e| e.to_string()),
+        "mp3" => mvl_audio::import_mp3(path).map_err(|e| e.to_string()),
+        other => Err(format!(
+            "unsupported file type {other:?} — open .wav or .mp3"
+        )),
+    }
+}
+
 fn screenshot_mode(args: &[String]) -> Result<(), String> {
     let parsed = headless::parse_args(args)?;
-    headless::render_to_png(&parsed, |_app| {
-        // Population of engine/demo state lands with the waveform and
-        // slider sub-items; 4.1 renders the shell with default strings.
+    headless::render_to_png(&parsed, |app| {
+        load_flagged(app, parsed.demo.as_deref(), parsed.open.as_deref())?;
+        if let Some(secs) = parsed.window_secs {
+            app.set_view_window_secs(secs);
+        }
+        if let Some(secs) = parsed.playhead {
+            app.set_playhead(secs);
+        }
+        Ok(())
     })?;
     println!("Screenshot written: {}", parsed.out.display());
     Ok(())
 }
 
-fn gui_mode() -> Result<(), String> {
-    let app = app::create().map_err(|e| e.to_string())?;
+fn gui_mode(args: &[String]) -> Result<(), String> {
+    let app = app::App::new().map_err(|e| e.to_string())?;
+    // --open PATH (GUI): load before showing so the window appears ready.
+    let open = args
+        .iter()
+        .position(|a| a == "--open")
+        .and_then(|i| args.get(i + 1));
+    if let Some(path) = open {
+        load_flagged(&app, None, Some(std::path::Path::new(path)))?;
+    }
     app.window()
         .show()
         .map_err(|e| format!("cannot show window: {e}"))?;

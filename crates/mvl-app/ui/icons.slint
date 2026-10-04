@@ -1,0 +1,76 @@
+// Copyright © salim77007j
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+// Icon set (D13): geometric filled paths, 16 px box inside a 28 px button.
+// Slint paths are fill-only, so the 1.75 px stroke look is achieved by
+// drawing the glyphs as filled outlines.
+
+import { Tokens } from "tokens.slint";
+
+// ── Glyphs (filled path data, 16×16 view box) ────────────────────────
+export global Icons {
+    // Zoom in (+)
+    out property <string> plus: "M 7 2 h 2 v 5 h 5 v 2 h -5 v 5 h -2 v -5 h -5 v -2 h 5 z";
+    // Zoom out (−)
+    out property <string> minus: "M 2 7 h 12 v 2 h -12 z";
+    // Fit: corner brackets around a dot
+    out property <string> fit: "M 2 2 h 4 v 1.6 h -2.4 v 2.4 h -1.6 z  M 10 2 h 4 v 4 h -1.6 v -2.4 h -2.4 z  M 2 10 h 1.6 v 2.4 h 2.4 v 1.6 h -4 z  M 12.4 10 h 1.6 v 4 h -4 v -1.6 h 2.4 z  M 7 7 h 2 v 2 h -2 z";
+    // Transport: play triangle
+    out property <string> play: "M 4 2 L 13 8 L 4 14 z";
+    // Pause bars
+    out property <string> pause: "M 3 2 h 3.6 v 12 h -3.6 z  M 9.4 2 h 3.6 v 12 h -3.6 z";
+    // Stop square
+    out property <string> stop: "M 3 3 h 10 v 10 h -10 z";
+    // Rewind to start (bar + triangle)
+    out property <string> rewind: "M 2 2 h 2 v 12 h -2 z  M 14 2 L 5 8 L 14 14 z";
+    // Record dot
+    out property <string> record: "M 8 2 a 6 6 0 1 1 -0.01 0 z";
+    // Folder import
+    out property <string> import: "M 1 4 h 5 l 1.6 1.8 h 7.4 v 1.8 h -5 l 3 3 h -1.8 l -3 -3 -3 3 h -1.8 l 3 -3 h -5.4 z  M 6.8 11.2 h 2.4 v 3.4 h 2.2 l -3.4 1.4 -3.4 -1.4 h 2.2 z";
+    // Export (arrow out of tray)
+    out property <string> export: "M 7.6 1.4 l 3.4 3 -3.4 3 v -2.2 h -2.4 v -1.6 h 2.4 z  M 1 7.6 h 4.6 v 1.8 h -2.8 v 3.8 h 10.4 v -3.8 h -2.8 v -1.8 h 4.6 v 7.4 h -14 z";
+    // Language / globe
+    out property <string> globe: "M 8 1 a 7 7 0 1 1 -0.01 0 z M 8 3 c -1 1.4 -1.6 3.1 -1.7 5 h 3.4 c -0.1 -1.9 -0.7 -3.6 -1.7 -5 z M 4.4 3.9 c -0.7 1.1 -1.1 2.6 -1.1 4.1 h 1.9 c 0.1 -1.5 0.4 -2.9 1 -4.1 z M 11.6 3.9 c -0.6 1.2 -0.9 2.6 -1 4.1 h 1.9 c 0 -1.5 -0.4 -3 -1.1 -4.1 z M 3.3 9.4 c 0.1 1.5 0.5 2.9 1.1 4 0.6 -1.2 1 -2.5 1 -4 z M 7.3 9.4 c 0.1 1.9 0.7 3.5 1.7 4.9 1 -1.4 1.6 -3 1.7 -4.9 z M 11.6 9.4 c 0 1.5 -0.4 2.8 -1 4 0.6 -1.1 1 -2.5 1 -4 z";
+    // Reset (circular arrow)
+    out property <string> reset: "M 8 2 a 6 6 0 1 0 6 6 h -2 a 4 4 0 1 1 -4 -4 v 2.4 l 4 -3.4 -4 -3.4 z";
+}
+
+// ── IconButton ───────────────────────────────────────────────────────
+// 28×28 hit area, 16 px glyph, hover +4 % / press +8 % surface lightness,
+// 2 px focus ring, 120–160 ms transitions (D13).
+export component IconButton inherits Rectangle {
+    width: 28px;
+    height: 28px;
+    border-radius: Tokens.radius-sm;
+    background: touch.pressed ? Tokens.bg-elevated-press
+        : touch.has-hover ? Tokens.bg-elevated-hover
+        : transparent;
+
+    in property <string> icon;
+    in property <color> glyph: Tokens.text-primary;
+    in property <bool> enabled: true;
+    in property <bool> active: false;
+    callback clicked;
+
+    opacity: root.enabled ? 1.0 : 0.4;
+    border-width: 1px;
+    border-color: root.active ? Tokens.accent-pitch : transparent;
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+
+    Path {
+        width: 16px;
+        height: 16px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        commands: root.icon;
+        fill: root.glyph;
+        viewbox-width: 16;
+        viewbox-height: 16;
+    }
+
+    animate background { duration: Tokens.anim-fast; easing: Tokens.motion; }
+}

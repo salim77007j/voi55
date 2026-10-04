@@ -1,0 +1,150 @@
+// Copyright © salim77007j
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+// Waveform well: the microscopy view. Renders the pyramid image produced
+// by the Rust waveform engine, a playhead overlay, wheel-zoom / drag-pan,
+// and the zoom controls. The audio time axis stays left-to-right in both
+// languages (industry convention for DAW timelines; disclosed in the
+// phase report).
+
+import { Tokens } from "tokens.slint";
+import { Icons, IconButton } from "icons.slint";
+
+export component WaveformPanel inherits Rectangle {
+    background: Tokens.bg-surface;
+    border-radius: Tokens.radius-md;
+    border-width: 1px;
+    border-color: Tokens.border-subtle;
+    clip: true;
+
+    // ── Inputs from Rust ─────────────────────────────────────────────
+    in property <image> wave-image;
+    in property <bool> has-audio: false;
+    in property <string> t-empty;
+    in property <string> zoom-label;
+    /// Playhead position as a fraction of the view (0..1), or < 0 hidden.
+    in property <float> playhead-frac: -1.0;
+    /// Track name shown in the corner.
+    in property <string> track-label;
+    /// Viewport size (read by Rust for image rendering).
+    in-out property <length> view-width: root.width;
+    in-out property <length> view-height: root.height;
+
+    // ── Outputs to Rust ──────────────────────────────────────────────
+    callback zoom(factor: float, anchor-frac: float);
+    callback pan(delta-frac: float);
+    callback fit();
+    /// Physical pixel size of the image area changed → re-render.
+    callback viewport-changed();
+
+    // Image element whose geometry defines the drawing viewport.
+    wf := Image {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        source: root.wave-image;
+        image-fit: fill;
+
+        changed width => { root.viewport-changed(); }
+        changed height => { root.viewport-changed(); }
+    }
+
+    // ── Playhead ─────────────────────────────────────────────────────
+    if root.playhead-frac >= 0.0 && root.playhead-frac <= 1.0: Rectangle {
+        x: root.playhead-frac * (parent.width - 2px);
+        y: 0;
+        width: 2px;
+        height: parent.height;
+        background: Tokens.text-primary;
+        opacity: 0.85;
+    }
+
+    // ── Interaction surface ──────────────────────────────────────────
+    property <length> last-pan-x: 0;
+    touch := TouchArea {
+        // Zoom with the wheel, anchored at the pointer.
+        scroll-event(e) => {
+            if (e.delta-y > 0) {
+                root.zoom(1.3, self.mouse-x / parent.width);
+            } else if (e.delta-y < 0) {
+                root.zoom(1.0 / 1.3, self.mouse-x / parent.width);
+            }
+            accept
+        }
+        // Drag to pan.
+        moved => {
+            if (self.pressed) {
+                root.pan((root.last-pan-x - self.mouse-x) / parent.width);
+                root.last-pan-x = self.mouse-x;
+            }
+        }
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down) {
+                root.last-pan-x = self.mouse-x;
+            }
+        }
+    }
+
+    // ── Empty state ──────────────────────────────────────────────────
+    if !root.has-audio: Text {
+        text: root.t-empty;
+        color: Tokens.text-muted;
+        font-size: Tokens.font-size-body;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        width: parent.width;
+        height: parent.height;
+    }
+
+    // ── Corner labels ────────────────────────────────────────────────
+    if root.has-audio && root.track-label != "": Text {
+        x: Tokens.sp-1;
+        y: Tokens.sp-half;
+        text: root.track-label;
+        color: Tokens.text-muted;
+        font-size: Tokens.font-size-small;
+        opacity: 0.9;
+    }
+
+    // ── Zoom controls (bottom-right corner, always LTR geometry) ────
+    Rectangle {
+        x: parent.width - self.width - Tokens.sp-1;
+        y: parent.height - self.height - Tokens.sp-1;
+        // 3 buttons x 28 px + 2 spacings + padding (fixed, no loops).
+        width: 100px;
+        height: 36px;
+        border-radius: Tokens.radius-sm;
+        background: Tokens.bg-scrim;
+        border-width: 1px;
+        border-color: Tokens.border-subtle;
+
+        row := HorizontalLayout {
+            x: Tokens.sp-half;
+            y: Tokens.sp-half;
+            spacing: Tokens.sp-half;
+
+            IconButton {
+                icon: Icons.minus;
+                clicked => { root.zoom(1.0 / 1.6, 0.5); }
+            }
+            IconButton {
+                icon: Icons.plus;
+                clicked => { root.zoom(1.6, 0.5); }
+            }
+            IconButton {
+                icon: Icons.fit;
+                clicked => { root.fit(); }
+            }
+        }
+    }
+
+    // Zoom readout next to the controls (top-right corner).
+    if root.zoom-label != "": Text {
+        x: parent.width - self.width - Tokens.sp-1;
+        y: Tokens.sp-half;
+        text: root.zoom-label;
+        color: Tokens.text-muted;
+        font-size: Tokens.font-size-small;
+    }
+}

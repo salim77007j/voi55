@@ -11,6 +11,28 @@ use crate::buffer::AudioBuffer;
 use crate::error::{AudioError, Result};
 use mvl_core::engine::EngineParams;
 
+/// Equal-weight mono downmix of `buf` (the engine's input domain).
+///
+/// A plain average preserves the level of a centered vocal stem; the result
+/// feeds the pYIN/PSOLA engines and the waveform display. Also used by the
+/// UI layer for the pitch-track overlay.
+pub fn downmix_mono(buf: &AudioBuffer) -> Vec<f32> {
+    let channels = usize::from(buf.channels());
+    let frames = buf.frames();
+    let mut mono = Vec::with_capacity(frames);
+    if channels <= 1 {
+        mono.extend_from_slice(buf.samples());
+    } else {
+        let scale = 1.0 / channels as f32;
+        for f in 0..frames {
+            let start = f * channels;
+            let sum: f32 = buf.samples()[start..start + channels].iter().sum();
+            mono.push(sum * scale);
+        }
+    }
+    mono
+}
+
 /// Renders `buf` offline with the Micro-Vocal Lab engine (D11 order:
 /// pitch → formant → air).
 ///
@@ -27,20 +49,7 @@ pub fn render_offline(buf: &AudioBuffer, params: &EngineParams) -> Result<AudioB
         ));
     }
 
-    // Downmix to mono.
-    let frames = buf.frames();
-    let mut mono = Vec::with_capacity(frames);
-    if channels == 1 {
-        mono.extend_from_slice(buf.samples());
-    } else {
-        let scale = 1.0 / channels as f32;
-        for f in 0..frames {
-            let start = f * channels;
-            let sum: f32 = buf.samples()[start..start + channels].iter().sum();
-            mono.push(sum * scale);
-        }
-    }
-
+    let mono = downmix_mono(buf);
     let (rendered, _track, _report) = mvl_core::pipeline::render(&mono, buf.sample_rate(), params)?;
 
     // Map back to the original channel layout.

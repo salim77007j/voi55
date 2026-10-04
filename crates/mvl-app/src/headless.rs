@@ -11,7 +11,6 @@
 //! animation tick, so a fixed number of spins runs every entry animation to
 //! completion — screenshots are byte-reproducible for identical inputs.
 
-use crate::AppWindow;
 use slint::ComponentHandle;
 use slint::platform::software_renderer::{
     MinimalSoftwareWindow, PremultipliedRgbaColor, RepaintBufferType,
@@ -47,19 +46,31 @@ pub struct ScreenshotArgs {
     pub out: PathBuf,
     pub width: u32,
     pub height: u32,
+    /// `--demo synth` — built-in demo vocal.
+    pub demo: Option<String>,
+    /// `--open PATH` — load an audio file.
+    pub open: Option<PathBuf>,
+    /// `--playhead SECS` — static playhead position.
+    pub playhead: Option<f64>,
+    /// `--window SECS` — visible time span (zoom state).
+    pub window_secs: Option<f64>,
 }
 
-/// Parses `--screenshot --out PATH [--width N] [--height N]`.
+/// Parses `--screenshot --out PATH [flags]`.
 ///
 /// Unknown flags are rejected so typos fail loudly instead of silently
 /// rendering a wrong evidence state.
 ///
 /// # Errors
-/// Fails on a missing `--out`, malformed sizes, or unknown flags.
+/// Fails on a missing `--out`, malformed values, or unknown flags.
 pub fn parse_args(args: &[String]) -> Result<ScreenshotArgs, String> {
     let mut out = None;
     let mut width = 1280u32;
     let mut height = 800u32;
+    let mut demo = None;
+    let mut open = None;
+    let mut playhead = None;
+    let mut window_secs = None;
     let mut it = args.iter().map(String::as_str);
     while let Some(a) = it.next() {
         match a {
@@ -77,6 +88,22 @@ pub fn parse_args(args: &[String]) -> Result<ScreenshotArgs, String> {
                     .and_then(|v| v.parse().ok())
                     .ok_or("--height needs a number")?
             }
+            "--demo" => demo = it.next().map(String::from),
+            "--open" => open = it.next().map(PathBuf::from),
+            "--playhead" => {
+                playhead = Some(
+                    it.next()
+                        .and_then(|v| v.parse().ok())
+                        .ok_or("--playhead needs seconds")?,
+                )
+            }
+            "--window" => {
+                window_secs = Some(
+                    it.next()
+                        .and_then(|v| v.parse().ok())
+                        .ok_or("--window needs seconds")?,
+                )
+            }
             other => return Err(format!("unknown screenshot flag: {other}")),
         }
     }
@@ -84,16 +111,20 @@ pub fn parse_args(args: &[String]) -> Result<ScreenshotArgs, String> {
         out: out.ok_or("--screenshot requires --out PATH")?,
         width,
         height,
+        demo,
+        open,
+        playhead,
+        window_secs,
     })
 }
 
-/// Renders the app window headlessly and writes a PNG.
+/// Renders the app headlessly and writes a PNG.
 ///
 /// # Errors
 /// Fails on platform setup, PNG encoding, or I/O — surfaced to `main`.
 pub fn render_to_png(
     args: &ScreenshotArgs,
-    populate: impl FnOnce(&AppWindow),
+    populate: impl FnOnce(&crate::app::App) -> Result<(), String>,
 ) -> Result<(), String> {
     let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
     slint::platform::set_platform(Box::new(HeadlessPlatform {
@@ -102,14 +133,19 @@ pub fn render_to_png(
     }))
     .map_err(|e| format!("platform already initialised: {e}"))?;
 
-    let app = crate::app::create().map_err(|e| e.to_string())?;
+    let app = crate::app::App::new().map_err(|e| e.to_string())?;
     window.set_size(slint::PhysicalSize::new(args.width, args.height));
-    populate(&app);
+    populate(&app)?;
     app.window().show().map_err(|e| e.to_string())?;
 
     // Spin the animation clock: 40 ticks × 16 ms = 640 virtual ms, enough
     // for the longest 160 ms token animation to finish from any start.
     for _ in 0..40 {
+        slint::platform::update_timers_and_animations();
+    }
+    // Layout has settled: re-render the waveform at the final viewport.
+    app.refresh();
+    for _ in 0..4 {
         slint::platform::update_timers_and_animations();
     }
 

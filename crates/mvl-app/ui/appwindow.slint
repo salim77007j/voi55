@@ -9,6 +9,8 @@
 // the Latin UI, IBM Plex Sans Arabic for the RTL/Arabic UI (4.5).
 
 import { Tokens } from "tokens.slint";
+import { WaveformPanel } from "waveform-panel.slint";
+import { WaveformPanel } from "waveform-panel.slint";
 
 import "../../../assets/fonts/Inter-Regular.ttf";
 import "../../../assets/fonts/Inter-Medium.ttf";
@@ -45,6 +47,20 @@ export component AppWindow inherits Window {
 
     // Report line for the status bar (format / engine state).
     in property <string> status-core;
+
+    // ── Waveform view state (owned by the Rust session) ───────────
+    in property <image> wave-image;
+    in property <bool> has-audio: false;
+    in property <string> track-label;
+    in property <string> zoom-label;
+    in property <float> playhead-frac: -1.0;
+    callback wave-zoom(factor: float, anchor-frac: float);
+    callback wave-pan(delta-frac: float);
+    callback wave-fit();
+    callback wave-viewport-changed();
+    // Viewport size of the waveform panel (two-way from the panel).
+    out property <length> view-width <=> wfpanel.view-width;
+    out property <length> view-height <=> wfpanel.view-height;
 
     VerticalLayout {
         spacing: 0;
@@ -101,19 +117,17 @@ export component AppWindow inherits Window {
                 padding: Tokens.sp-2;
                 spacing: Tokens.sp-1;
 
-                Rectangle {
-                    background: Tokens.bg-surface;
-                    border-radius: Tokens.radius-md;
-                    border-width: 1px;
-                    border-color: Tokens.border-subtle;
-
-                    // Empty-state hint (replaced by the waveform view in 4.2).
-                    Text {
-                        text: root.t-waveform-empty;
-                        color: Tokens.text-muted;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
+                wfpanel := WaveformPanel {
+                    wave-image: root.wave-image;
+                    has-audio: root.has-audio;
+                    t-empty: root.t-waveform-empty;
+                    track-label: root.track-label;
+                    zoom-label: root.zoom-label;
+                    playhead-frac: root.playhead-frac;
+                    zoom(f, a) => { root.wave-zoom(f, a); }
+                    pan(d) => { root.wave-pan(d); }
+                    fit() => { root.wave-fit(); }
+                    viewport-changed() => { root.wave-viewport-changed(); }
                 }
             }
         }

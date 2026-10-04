@@ -11,6 +11,8 @@
 
 pub mod app;
 pub mod headless;
+pub mod session;
+pub mod waveform;
 
 mod generated {
     // The generated bindings are managed by SixtyFPS; keep our crate-level

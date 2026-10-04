@@ -37,6 +37,9 @@ codegen-units = 1
 strip = true
 
 # Keep third-party DSP (rustfft SIMD etc.) fast under `cargo test` while our
-# own crates stay at opt-level 0 for debuggability.
+# own crates stay at opt-level 0 for debuggability. Deps get no debug info
+# (slint/rustfft debug info alone is gigabytes).
 [profile.dev.package."*"]
 opt-level = 2
+debug = false
+strip = "debuginfo"
