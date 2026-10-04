@@ -21,6 +21,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod air;
 pub mod engine;
 pub mod error;
 pub mod formant;
