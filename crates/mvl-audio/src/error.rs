@@ -42,6 +42,10 @@ pub enum AudioError {
     /// Filesystem / std I/O failure.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// DSP engine failure (analysis/FFT), propagated from `mvl-core`.
+    #[error("DSP engine error: {0}")]
+    Dsp(#[from] mvl_core::error::CoreError),
 }
 
 /// Convenient alias used across `mvl-audio`.

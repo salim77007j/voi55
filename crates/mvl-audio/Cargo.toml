@@ -9,6 +9,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+mvl-core = { path = "../mvl-core" }
 cpal.workspace = true
 hound.workspace = true
 symphonia.workspace = true

@@ -351,6 +351,7 @@ dependencies = [
  "hound",
  "log",
  "mp3lame-encoder",
+ "mvl-core",
  "symphonia",
  "thiserror 2.0.21",
 ]

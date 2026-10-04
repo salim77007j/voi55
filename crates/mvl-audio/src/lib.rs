@@ -19,6 +19,7 @@
 pub mod buffer;
 pub mod capture;
 pub mod devices;
+pub mod engine;
 pub mod error;
 pub mod mp3;
 pub mod player;

@@ -27,6 +27,7 @@ pub mod error;
 pub mod formant;
 pub mod lpc;
 pub mod measure;
+pub mod pipeline;
 pub mod psola;
 pub mod pyin;
 pub mod synth;
