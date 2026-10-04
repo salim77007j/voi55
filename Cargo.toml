@@ -18,6 +18,9 @@ cpal = "0.18"
 hound = "3.5"
 symphonia = { version = "0.6", default-features = false, features = ["mp3"] }
 mp3lame-encoder = "0.2"
+# DSP primitives (D6)
+realfft = "3"
+rustfft = "6"
 # Utilities
 thiserror = "2"
 log = "0.4"
@@ -27,3 +30,8 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# Keep third-party DSP (rustfft SIMD etc.) fast under `cargo test` while our
+# own crates stay at opt-level 0 for debuggability.
+[profile.dev.package."*"]
+opt-level = 2

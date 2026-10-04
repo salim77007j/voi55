@@ -13,11 +13,18 @@
 //! The crate is deliberately free of audio-I/O dependencies: it consumes and
 //! produces plain `f32` sample buffers so it stays unit-testable and portable.
 //!
-//! Phase 2 note: this crate currently defines the *parameter contract* the UI
-//! and the audio layer bind to. The DSP itself lands in Phase 3 with the
-//! accuracy gates from D7.
+//! Phase 3 note: the DSP itself lives here now — `pyin` (D7), `psola` (D8),
+//! `formant` (D9), `air` (D10), composed by `pipeline` (D11 order:
+//! pitch → formant → air). `synth` provides the deterministic fixtures the
+//! accuracy gates and the evidence corpus run on.
+
+#![forbid(unsafe_code)]
 
 pub mod engine;
+pub mod error;
+pub mod lpc;
+pub mod pyin;
+pub mod synth;
 
 /// Crate version, from Cargo.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

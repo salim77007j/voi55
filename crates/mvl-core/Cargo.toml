@@ -9,3 +9,10 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+realfft.workspace = true
+rustfft.workspace = true
+thiserror.workspace = true
+
+# The `phase3_evidence` example writes WAV fixtures (dev-only, no lib I/O).
+[dev-dependencies]
+hound.workspace = true
