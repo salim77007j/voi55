@@ -1,0 +1,14 @@
+Micro-Vocal Lab — Phase 3 evidence metrics
+==========================================
+fixture A: 160 Hz vowel (Lorentzian formants 500/1500/2500/3500)
+fixture B: 175/190/165 Hz vowels with white-noise breath bursts
+
+A: cepstral F1 = 494.5 Hz (prescribed 500)
+A formant 130mm: cepstral F1 = 573.2 Hz (prescribed 500×1.346 = 673)
+A pitch +4st: cepstral comb strength at 201.6 Hz = 2369.44 (target), at 160 Hz = 3842.11 (input)
+B air −18dB: inter-phrase breath RMS 0.1449 → 0.0157 (-19.3 dB)
+A pitch +4st: frames=100 voiced=0.97 medianF0=160.0Hz stages[pitch,formant,air]=[true, false, false]
+A formant 130mm: frames=100 voiced=0.97 medianF0=160.0Hz stages[pitch,formant,air]=[false, true, false]
+A air +6dB: frames=100 voiced=0.97 medianF0=160.0Hz stages[pitch,formant,air]=[false, false, true]
+B air −18dB: frames=160 voiced=0.71 medianF0=175.0Hz stages[pitch,formant,air]=[false, false, true]
+A combined: frames=100 voiced=0.97 medianF0=160.0Hz stages[pitch,formant,air]=[true, true, true]
