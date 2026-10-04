@@ -30,12 +30,19 @@
 //! Neutral (`air_db == 0`) returns the input bit-exactly; the harmonic
 //! path gain is exactly 1.0 for any slider position — only the residual
 //! is ever touched.
+//!
+//! Phase 6 streaming: the frame loop lives in [`AirStage`], a chunk-driven
+//! driver; [`process_air`] is a thin wrapper. Frames run strictly in
+//! order, so chunked driving is bit-identical to the single-pass render
+//! (gate-tested in `crate::stream`).
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 use crate::error::{CoreError, Result};
 use crate::ola::CarryOla;
 use crate::pyin::PyinResult;
+use rustfft::num_complex::Complex;
 
 /// Mask smoothing half-width in STFT frames (±2 frames ≈ ±21 ms @48 kHz).
 const MASK_SMOOTH_HALF: usize = 2;
@@ -86,61 +93,215 @@ pub fn process_air(
     }
     let slider = air_db.clamp(-24.0, 12.0);
 
-    // Frame geometry: ~2048 samples at 48 kHz equivalent, 75 % overlap.
-    let n = usize::max(
-        1024,
-        (2048.0 * sample_rate as f64 / 48_000.0).round() as usize,
-    )
-    .next_power_of_two();
-    let hop = n / 4;
-    let bin_hz = sample_rate as f64 / n as f64;
-    let nyq_bins = n / 2;
-    let breath_lo = (1000.0 / bin_hz) as usize;
-    let breath_hi = usize::min((8000.0 / bin_hz) as usize, nyq_bins);
+    let mut stage = AirStage::new(x.len(), sample_rate, track, slider, 0);
+    stage.advance_to(x, 0, usize::MAX)?;
+    stage.finish(x, 0);
+    match stage.take_error() {
+        Some(e) => Err(e),
+        None => Ok(stage.into_output()),
+    }
+}
 
-    let mut planner = realfft::RealFftPlanner::<f32>::new();
-    let r2c = planner.plan_fft_forward(n);
-    let c2r = planner.plan_fft_inverse(n);
+/// Chunk-driven air stage (Phase 6). Same contract as
+/// `formant::FormantStage`: frames in order, input as a window
+/// `[x_base, x_base + x.len())` of absolute positions, gate breaks when
+/// the window does not yet cover the next frame, `start > 0` positions the
+/// output frontier for chain restarts.
+pub(crate) struct AirStage<'a> {
+    len: usize,
+    n: usize,
+    hop: usize,
+    slider: f64,
+    bin_hz: f64,
+    nyq_bins: usize,
+    breath_lo: usize,
+    breath_hi: usize,
+    r2c: Arc<dyn realfft::RealToComplex<f32>>,
+    c2r: Arc<dyn realfft::ComplexToReal<f32>>,
+    window: Vec<f32>,
+    ola: CarryOla,
+    track: &'a PyinResult,
+    sample_rate: u32,
+    frame: usize,
+    frames: usize,
+    // per-frame scratch / state
+    in_buf: Vec<f32>,
+    spectrum: Vec<Complex<f32>>,
+    y_out: Vec<f32>,
+    mask_ring: VecDeque<Vec<f64>>,
+    breath_hist: VecDeque<f64>,
+    out: Vec<f32>,
+    /// Absolute position of `out[0]` (front-trimmed for streaming).
+    out_base: usize,
+    err: Option<CoreError>,
+    done: bool,
+}
 
-    let window: Vec<f32> = (0..n)
-        .map(|i| (0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / n as f64).cos()) as f32)
-        .collect();
+impl<'a> AirStage<'a> {
+    /// `slider` must already be clamped to [−24, +12] and non-zero.
+    pub(crate) fn new(
+        len: usize,
+        sample_rate: u32,
+        track: &'a PyinResult,
+        slider: f64,
+        start: usize,
+    ) -> Self {
+        // Frame geometry: ~2048 samples at 48 kHz equivalent, 75 % overlap.
+        let n = usize::max(
+            1024,
+            (2048.0 * sample_rate as f64 / 48_000.0).round() as usize,
+        )
+        .next_power_of_two();
+        let hop = n / 4;
+        let bin_hz = sample_rate as f64 / n as f64;
+        let nyq_bins = n / 2;
+        let breath_lo = (1000.0 / bin_hz) as usize;
+        let breath_hi = usize::min((8000.0 / bin_hz) as usize, nyq_bins);
 
-    let len = x.len();
-    let frames = (len - 1) / hop + 1;
-    // Carry-based OLA (75 % overlap → span 2n; see `ola`). No voicing
-    // crossfade in this stage: the residual path has no bypass blend.
-    let mut ola = CarryOla::new(len, 2 * n);
-    let mut out: Vec<f32> = Vec::with_capacity(len);
+        let mut planner = realfft::RealFftPlanner::<f32>::new();
+        let r2c = planner.plan_fft_forward(n);
+        let c2r = planner.plan_fft_inverse(n);
 
-    let mut in_buf = r2c.make_input_vec();
-    let mut spectrum = r2c.make_output_vec();
-    let mut y_out = c2r.make_output_vec();
+        let window: Vec<f32> = (0..n)
+            .map(|i| (0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / n as f64).cos()) as f32)
+            .collect();
 
-    // Comb-mask ring for temporal smoothing (±2 frames).
-    let mut mask_ring: VecDeque<Vec<f64>> = VecDeque::with_capacity(2 * MASK_SMOOTH_HALF + 1);
-    let mut breath_hist: VecDeque<f64> = VecDeque::with_capacity(2 * MASK_SMOOTH_HALF + 1);
+        // Scratch buffers, sized once (create before the plans move into
+        // the struct).
+        let in_buf = r2c.make_input_vec();
+        let spectrum = r2c.make_output_vec();
+        let y_out = c2r.make_output_vec();
 
-    for t in 0..frames {
-        // Frame t writes [t·hop, t·hop + n); the previous frame's writes
-        // end at (t−1)·hop + n ≤ t·hop + n − hop, so everything below
-        // t·hop is final (75 % overlap keeps the ring bounded).
-        ola.flush_to(t * hop, x, None, 1e-6, &mut out);
-        let start = t * hop;
-        let take = usize::min(n, len.saturating_sub(start));
-        in_buf[..take].fill(0.0);
-        for (dst, (&src, &w)) in in_buf[..take]
+        // Carry-based OLA (75 % overlap → span 2n; see `ola`). No voicing
+        // crossfade in this stage: the residual path has no bypass blend.
+        let ola = CarryOla::with_start(len, 2 * n, start);
+        let frames = (len - 1) / hop + 1;
+        let frame = if start > 0 {
+            usize::min(start.div_ceil(hop), frames)
+        } else {
+            0
+        };
+        Self {
+            len,
+            n,
+            hop,
+            slider,
+            bin_hz,
+            nyq_bins,
+            breath_lo,
+            breath_hi,
+            r2c,
+            c2r,
+            window,
+            ola,
+            track,
+            sample_rate,
+            frame,
+            frames,
+            in_buf,
+            spectrum,
+            y_out,
+            mask_ring: VecDeque::with_capacity(2 * MASK_SMOOTH_HALF + 1),
+            breath_hist: VecDeque::with_capacity(2 * MASK_SMOOTH_HALF + 1),
+            out: Vec::with_capacity(len.saturating_sub(start)),
+            out_base: start,
+            err: None,
+            done: false,
+        }
+    }
+
+    /// Absolute output frontier.
+    pub(crate) fn flushed(&self) -> usize {
+        self.ola.head()
+    }
+
+    pub(crate) fn out_slice(&self) -> &[f32] {
+        &self.out
+    }
+
+    pub(crate) fn out_base(&self) -> usize {
+        self.out_base
+    }
+
+    /// Drops the output prefix below `keep_from` (the consumer's frontier).
+    pub(crate) fn trim_to(&mut self, keep_from: usize) {
+        let keep_from = keep_from.clamp(self.out_base, self.out.len() + self.out_base);
+        let k = keep_from - self.out_base;
+        if k > 0 {
+            self.out.drain(..k);
+            self.out_base = keep_from;
+        }
+    }
+
+    /// What the next unprocessed frame needs from the input (absolute end
+    /// position, exclusive), or `None` when the frame grid is done.
+    pub(crate) fn next_need(&self) -> Option<usize> {
+        if self.frame >= self.frames {
+            return None;
+        }
+        let start = self.frame * self.hop;
+        let take = usize::min(self.n, self.len.saturating_sub(start));
+        Some(start + take)
+    }
+
+    /// STFT window size in samples (the stage's input-lookahead bound).
+    pub(crate) fn window_samples(&self) -> usize {
+        self.n
+    }
+
+    /// Processes frames until the flushed frontier reaches `target`, the
+    /// grid is exhausted, or the input window no longer covers the next
+    /// frame. `target = usize::MAX` requires the complete input up front.
+    pub(crate) fn advance_to(&mut self, x: &[f32], x_base: usize, target: usize) -> Result<()> {
+        if self.done {
+            return Ok(());
+        }
+        while self.frame < self.frames {
+            if self.flushed() >= target {
+                break;
+            }
+            let start = self.frame * self.hop;
+            let take = usize::min(self.n, self.len.saturating_sub(start));
+            if x_base + x.len() < start + take {
+                break; // input not produced yet — never read it as silence
+            }
+            // Frame t writes [t·hop, t·hop + n); the previous frame's writes
+            // end at (t−1)·hop + n ≤ t·hop + n − hop, so everything below
+            // t·hop is final (75 % overlap keeps the ring bounded).
+            self.ola
+                .flush_to(start, x, x_base, None, 1e-6, &mut self.out);
+            let visible = &x[(start - x_base)..(start - x_base + take)];
+            if let Err(e) = self.process_frame(start, take, visible) {
+                self.err = Some(e);
+                self.done = true;
+                break;
+            }
+            self.frame += 1;
+        }
+        if let Some(e) = self.err.take() {
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    /// One STFT frame — moved verbatim from the historical single-pass
+    /// loop (`x` → the frame's visible window).
+    fn process_frame(&mut self, start: usize, take: usize, x: &[f32]) -> Result<()> {
+        let n = self.n;
+        self.in_buf[..take].fill(0.0);
+        for (dst, (&src, &w)) in self.in_buf[..take]
             .iter_mut()
-            .zip(x[start..start + take].iter().zip(&window))
+            .zip(x.iter().zip(&self.window))
         {
             *dst = src * w;
         }
-        r2c.process(&mut in_buf, &mut spectrum)
+        self.r2c
+            .process(&mut self.in_buf, &mut self.spectrum)
             .map_err(|e| CoreError::Fft(e.to_string()))?;
 
         // --- pYIN parameters for this frame -----------------------------
-        let t_sec = (t * hop + n / 2) as f64 / sample_rate as f64;
-        let (f0, v_prob) = track_at(track, t_sec);
+        let t_sec = (start + n / 2) as f64 / f64::from(self.sample_rate);
+        let (f0, v_prob) = track_at(self.track, t_sec);
         let voiced = f0 > 0.0;
 
         // --- comb mask for this frame ------------------------------------
@@ -149,23 +310,23 @@ pub fn process_air(
         // over a ±PEAK_FLOOR_BINS frequency window). The second condition
         // keeps "ghost harmonics" — frequencies that are multiples of F0
         // but carry no voiced energy — fully in the residual path.
-        let mut comb = vec![0.0f64; nyq_bins + 1];
+        let mut comb = vec![0.0f64; self.nyq_bins + 1];
         let mut breath_obs = 0.0f64;
         if voiced {
             let f0d = f64::from(f0);
             // Local spectral floor: median magnitude over a ±10-bin window
             // excluding the centre ±2 bins.
-            let floor = local_floor(&spectrum, nyq_bins + 1);
+            let floor = local_floor(&self.spectrum, self.nyq_bins + 1);
             for (k, slot) in comb.iter_mut().enumerate() {
-                let f = k as f64 * bin_hz;
+                let f = k as f64 * self.bin_hz;
                 let nearest = (f / f0d).round().max(1.0) * f0d;
                 let d = f - nearest;
-                let width = (COMB_MAIN_LOBE_BINS * bin_hz).max(COMB_SMEAR * f);
+                let width = (COMB_MAIN_LOBE_BINS * self.bin_hz).max(COMB_SMEAR * f);
                 let geometry = (-(d * d) / (width * width)).exp();
                 let prominence = smoothstep(
                     PEAK_FLOOR_LO * floor[k],
                     PEAK_FLOOR_HI * floor[k],
-                    f64::from(spectrum[k].norm()),
+                    f64::from(self.spectrum[k].norm()),
                 );
                 *slot = geometry * prominence;
             }
@@ -173,7 +334,12 @@ pub fn process_air(
             // Unvoiced: spectral flatness in 1–8 kHz feeds the breath
             // detector; the whole frame is residual.
             let (mut ln_sum, mut sum, mut count) = (0.0f64, 0.0f64, 0.0f64);
-            for s in spectrum.iter().take(breath_hi + 1).skip(breath_lo) {
+            for s in self
+                .spectrum
+                .iter()
+                .take(self.breath_hi + 1)
+                .skip(self.breath_lo)
+            {
                 let p = f64::from(s.norm_sqr()) + 1e-20;
                 ln_sum += p.ln();
                 sum += p;
@@ -185,56 +351,71 @@ pub fn process_air(
                     * (1.0 - f64::from(v_prob));
             }
         }
-        breath_hist.push_back(breath_obs);
-        if breath_hist.len() > 2 * MASK_SMOOTH_HALF + 1 {
-            breath_hist.pop_front();
+        self.breath_hist.push_back(breath_obs);
+        if self.breath_hist.len() > 2 * MASK_SMOOTH_HALF + 1 {
+            self.breath_hist.pop_front();
         }
-        mask_ring.push_back(comb);
-        if mask_ring.len() > 2 * MASK_SMOOTH_HALF + 1 {
-            mask_ring.pop_front();
+        self.mask_ring.push_back(comb);
+        if self.mask_ring.len() > 2 * MASK_SMOOTH_HALF + 1 {
+            self.mask_ring.pop_front();
         }
-        let ring_len = mask_ring.len();
-        let breath_prob = breath_hist.iter().sum::<f64>() / breath_hist.len() as f64;
+        let ring_len = self.mask_ring.len();
+        let breath_prob = self.breath_hist.iter().sum::<f64>() / self.breath_hist.len() as f64;
 
         // --- per-bin total gain: harmonic path at 1.0, residual scaled ---
-        let mut applied = vec![0.0f64; nyq_bins + 1];
+        let mut applied = vec![0.0f64; self.nyq_bins + 1];
         for (k, slot) in applied.iter_mut().enumerate() {
             // Temporally smoothed mask.
             let mut m = 0.0f64;
-            for masks in &mask_ring {
+            for masks in &self.mask_ring {
                 m += masks[k];
             }
             m /= ring_len as f64;
-            let f = k as f64 * bin_hz;
+            let f = k as f64 * self.bin_hz;
             let w = 0.25 + 0.75 * smoothstep(BAND_LOW_HZ, BAND_HIGH_HZ, f);
-            let g = if slider > 0.0 {
+            let g = if self.slider > 0.0 {
                 let tilt = 6.0 * (f / 6000.0).max(1.0).log2();
-                slider * w + (slider / 12.0) * tilt.min(6.0)
+                self.slider * w + (self.slider / 12.0) * tilt.min(6.0)
             } else {
                 let ess = smoothstep(ESS_RISE.0, ESS_RISE.1, f)
                     * (1.0 - smoothstep(ESS_FALL.0, ESS_FALL.1, f));
-                slider * w * (1.0 + BREATH_EXPANSION * breath_prob + 0.6 * ess)
+                self.slider * w * (1.0 + BREATH_EXPANSION * breath_prob + 0.6 * ess)
             };
             let gain = 10.0f64.powf(g.clamp(GAIN_MIN_DB, GAIN_MAX_DB) / 20.0);
             *slot = m + (1.0 - m) * gain;
         }
 
         // --- apply, overlap-add ------------------------------------------
-        for (spec, m) in spectrum.iter_mut().zip(&applied) {
+        for (spec, m) in self.spectrum.iter_mut().zip(&applied) {
             *spec *= *m as f32;
         }
-        c2r.process(&mut spectrum, &mut y_out)
+        self.c2r
+            .process(&mut self.spectrum, &mut self.y_out)
             .map_err(|e| CoreError::Fft(e.to_string()))?;
         let inv_n = 1.0 / n as f32;
         for i in 0..take {
-            let w = window[i];
-            ola.add(start + i, y_out[i] * inv_n * w, w * w);
+            let w = self.window[i];
+            self.ola.add(start + i, self.y_out[i] * inv_n * w, w * w);
         }
+        Ok(())
     }
 
-    // Normalize the overlap-add.
-    ola.flush_all(x, None, 1e-6, &mut out);
-    Ok(out)
+    /// Normalize the overlap-add (end of signal). Requires the input window
+    /// to cover up to `len`.
+    pub(crate) fn finish(&mut self, x: &[f32], x_base: usize) {
+        self.done = true;
+        self.ola.flush_all(x, x_base, None, 1e-6, &mut self.out);
+    }
+
+    pub(crate) fn take_error(&mut self) -> Option<CoreError> {
+        self.err.take()
+    }
+
+    /// Consumes the driver after a full error-free run.
+    pub(crate) fn into_output(self) -> Vec<f32> {
+        debug_assert_eq!(self.flushed(), self.len, "full run must flush everything");
+        self.out
+    }
 }
 
 /// Nearest pYIN track frame values (f0, voiced probability) for time `t`.

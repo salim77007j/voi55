@@ -31,6 +31,7 @@ pub(crate) mod ola;
 pub mod pipeline;
 pub mod psola;
 pub mod pyin;
+pub mod stream;
 pub mod synth;
 
 /// Crate version, from Cargo.

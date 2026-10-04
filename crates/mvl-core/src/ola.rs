@@ -13,6 +13,14 @@
 //!
 //! Memory per stage after the change: one output vector + one small ring
 //! (tens of KB) instead of four full-length buffers.
+//!
+//! Phase 6 streaming: `flush_to`/`flush_all` take an `x_base` offset so a
+//! stage can be driven from a *windowed* input buffer (the previous stage's
+//! trimmed output) while all bookkeeping stays in absolute sample
+//! positions. `CarryOla::with_start` opens the head at a non-zero offset
+//! (chain restart at the playhead). Flush cadence never changes values —
+//! only when samples are emitted — so chunked driving is bit-identical to
+//! the full-buffer render (gate-tested in `stream`).
 
 use crate::pyin::PyinResult;
 
@@ -34,15 +42,24 @@ pub(crate) struct CarryOla {
 }
 
 impl CarryOla {
-    pub(crate) fn new(len: usize, span: usize) -> Self {
+    /// Opens the ring with the flush head at sample `start`
+    /// (streaming restart: positions below `start` are never emitted and
+    /// callers clip their writes to `>= start`). Whole-signal stages pass 0.
+    pub(crate) fn with_start(len: usize, span: usize, start: usize) -> Self {
         let ring = (2 * span + 16).next_power_of_two();
         Self {
             ring_acc: vec![0.0; ring],
             ring_wsum: vec![0.0; ring],
             mask: ring - 1,
-            head: 0,
+            head: start,
             len,
         }
+    }
+
+    /// Absolute index of the next sample to flush (the stage's output
+    /// frontier).
+    pub(crate) fn head(&self) -> usize {
+        self.head
     }
 
     /// Adds one weighted contribution at absolute position `pos`
@@ -58,6 +75,9 @@ impl CarryOla {
     /// Flushes samples `head..watermark` into `out`, applying the stage's
     /// normalization (and voicing crossfade when `env` is `Some`).
     ///
+    /// `x` is the stage's input window covering absolute positions
+    /// `x_base..x_base + x.len()` (a full signal passes `x_base = 0`).
+    ///
     /// `shifted = acc/wsum` where the window sum is above `floor`, else the
     /// input sample passes through; with an envelope, the result is
     /// `v·shifted + (1−v)·x[i]` — exactly the previous full-buffer loops.
@@ -65,6 +85,7 @@ impl CarryOla {
         &mut self,
         watermark: usize,
         x: &[f32],
+        x_base: usize,
         mut env: Option<&mut EnvStream>,
         floor: f32,
         out: &mut Vec<f32>,
@@ -74,7 +95,7 @@ impl CarryOla {
             let i = self.head;
             let slot = i & self.mask;
             let (acc, wsum) = (self.ring_acc[slot], self.ring_wsum[slot]);
-            let src = x[i];
+            let src = x[i - x_base];
             if let Some(stream) = env.as_deref_mut() {
                 let v = stream.value_at(i);
                 let shifted = if wsum > floor { acc / wsum } else { src };
@@ -93,12 +114,13 @@ impl CarryOla {
     pub(crate) fn flush_all(
         &mut self,
         x: &[f32],
+        x_base: usize,
         env: Option<&mut EnvStream>,
         floor: f32,
         out: &mut Vec<f32>,
     ) {
         let watermark = self.len;
-        self.flush_to(watermark, x, env, floor, out);
+        self.flush_to(watermark, x, x_base, env, floor, out);
     }
 }
 
@@ -123,6 +145,12 @@ impl<'a> EnvStream<'a> {
             frame: 0,
             last_i: 0,
         }
+    }
+
+    /// Restarts the stream at absolute sample `start` (chain restart at the
+    /// playhead). `value_at` then only accepts `i >= start`.
+    pub(crate) fn reset_to(&mut self, start: usize) {
+        self.last_i = start;
     }
 
     pub(crate) fn value_at(&mut self, i: usize) -> f32 {
