@@ -16,6 +16,7 @@ export component TransportBar inherits Rectangle {
     in property <bool> recording: false;
     in property <string> time-readout;
     in property <string> t-record;
+    in property <bool> rtl;
     // Transport commands (handled in Rust).
     callback play-pause();
     callback stop();
@@ -29,7 +30,12 @@ export component TransportBar inherits Rectangle {
         alignment: start;
 
         // Record: red glyph while armed, pulses via opacity animation.
+        // layout-order fully mirrors the row in RTL: LTR is
+        // [rec rewind play stop readout spring rec-text], RTL is the exact
+        // reverse (glyphs keep their playback-direction meaning: the time
+        // axis stays LTR in both languages, disclosed in the phase report).
         rec := IconButton {
+            layout-order: root.rtl ? 6 : 0;
             icon: Icons.record;
             glyph: root.recording ? Tokens.state-record : Tokens.text-primary;
             enabled: root.has-project;
@@ -37,12 +43,14 @@ export component TransportBar inherits Rectangle {
         }
 
         IconButton {
+            layout-order: root.rtl ? 5 : 1;
             icon: Icons.rewind;
             enabled: root.has-project;
             clicked => { root.rewind(); }
         }
 
         playbtn := IconButton {
+            layout-order: root.rtl ? 4 : 2;
             icon: root.playing ? Icons.pause : Icons.play;
             glyph: root.playing ? Tokens.state-play : Tokens.text-primary;
             enabled: root.has-project;
@@ -50,13 +58,15 @@ export component TransportBar inherits Rectangle {
         }
 
         IconButton {
+            layout-order: root.rtl ? 3 : 3;
             icon: Icons.stop;
             enabled: root.has-project;
             clicked => { root.stop(); }
         }
 
-        // Time readout (tabular feel via right-aligned fixed box).
+        // Time readout (fixed box, LTR digits both directions).
         Text {
+            layout-order: root.rtl ? 2 : 4;
             text: root.time-readout;
             color: Tokens.text-primary;
             font-size: Tokens.font-size-value;
@@ -65,9 +75,10 @@ export component TransportBar inherits Rectangle {
             horizontal-alignment: center;
         }
 
-        Rectangle {} // spring
+        Rectangle { layout-order: root.rtl ? 1 : 5; } // spring
 
         if root.recording: Text {
+            layout-order: root.rtl ? 0 : 6;
             text: root.t-record;
             color: Tokens.state-record;
             vertical-alignment: center;

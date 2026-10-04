@@ -77,8 +77,9 @@ export component IconButton inherits Rectangle {
 
 // Text chip button (same chrome as IconButton, label instead of a glyph).
 export component ChipButton inherits Rectangle {
-    width: 28px;
+    width: root.chip-width;
     height: 28px;
+    in property <length> chip-width: 28px;
     border-radius: Tokens.radius-sm;
     background: touch.pressed ? Tokens.bg-elevated-press
         : touch.has-hover ? Tokens.bg-elevated-hover

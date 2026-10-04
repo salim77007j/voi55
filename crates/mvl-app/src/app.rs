@@ -18,12 +18,13 @@
 
 use crate::AppWindow;
 use crate::dialogs;
+use crate::i18n::{self, Lang};
 use crate::session::Session;
 use crate::waveform::{self, STUDIO_COLORS, View, WaveformColors, WaveformPyramid};
 use mvl_audio::AudioBuffer;
 use mvl_core::VERSION;
 use mvl_core::engine::EngineParams;
-use slint::{ComponentHandle, Image, Rgba8Pixel, SharedPixelBuffer, SharedString};
+use slint::{ComponentHandle, Image, Rgba8Pixel, SharedPixelBuffer};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::rc::Weak;
@@ -78,32 +79,19 @@ pub struct App {
     export_bitrate: Cell<u32>,
     /// True when parameters changed since the last render.
     dirty: Cell<bool>,
+    /// UI language (4.5): drives strings, embedded font and layout
+    /// direction; defaults to English (D1).
+    lang: Cell<Lang>,
 }
 
 impl App {
-    /// Creates the window, installs the English default strings and wires
-    /// all callbacks.
+    /// Creates the window, installs the default (English) strings and
+    /// wires all callbacks.
     ///
     /// # Errors
     /// Fails when the Slint platform cannot create the window adapter.
     pub fn new() -> Result<Rc<Self>, slint::PlatformError> {
         let window = AppWindow::new()?;
-
-        // English defaults (i18n table with Arabic arrives in sub-item 4.5).
-        window.set_t_title("Micro-Vocal Lab".into());
-        window.set_t_version(format!("v{VERSION}").into());
-        window.set_t_waveform_empty(
-            "No audio loaded — import a WAV / MP3, record, or run with --demo synth".into(),
-        );
-        window.set_t_pitch("Pitch".into());
-        window.set_t_air("Air & Breath".into());
-        window.set_t_formant("Formant".into());
-        window.set_status_core(
-            format!(
-                "Engine {VERSION} ready · pitch ±12 st / 1 ¢ · air ±dB / 0.1 dB · formant 130–190 mm"
-            )
-            .into(),
-        );
 
         let app = Rc::new(Self {
             window,
@@ -124,8 +112,12 @@ impl App {
             export_format: Cell::new(0),
             export_bitrate: Cell::new(mvl_audio::DEFAULT_MP3_BITRATE),
             dirty: Cell::new(false),
+            lang: Cell::new(Lang::En),
         });
         *app.self_weak.borrow_mut() = Rc::downgrade(&app);
+
+        // Install the English table (D1 default): strings, font, direction.
+        app.apply_language(Lang::En);
 
         // Waveform callbacks.
         let weak = Rc::downgrade(&app);
@@ -243,6 +235,18 @@ impl App {
             }
         });
 
+        // Language chip (4.5): toggles EN LTR ↔ AR RTL at runtime.
+        let weak = Rc::downgrade(&app);
+        app.window.on_toggle_language(move || {
+            if let Some(app) = weak.upgrade() {
+                let next = match app.lang.get() {
+                    Lang::En => Lang::Ar,
+                    Lang::Ar => Lang::En,
+                };
+                app.set_language(next);
+            }
+        });
+
         // UI poller: transport state, playhead and time readout.
         let weak = app.self_weak.borrow().clone();
         app.poll_timer.borrow_mut().start(
@@ -283,6 +287,106 @@ impl App {
     /// Current status line (tests/evidence).
     pub fn status_line(&self) -> String {
         self.window.get_status_core().to_string()
+    }
+
+    // ── i18n (4.5) ──────────────────────────────────────────────
+
+    /// The active UI language (tests/evidence).
+    pub fn lang(&self) -> Lang {
+        self.lang.get()
+    }
+
+    /// Switches the UI language at runtime: every user-visible string,
+    /// the embedded font family and the layout direction follow the
+    /// table. Safe with a project loaded — composed lines rebuild from
+    /// the session; transient status extras are dropped (they reappear
+    /// with the next action, already in the new language).
+    pub fn set_language(&self, lang: Lang) {
+        if self.lang.get() == lang {
+            return;
+        }
+        self.lang.set(lang);
+        self.apply_language(lang);
+    }
+
+    /// Installs every string/font/direction property for `lang` and
+    /// recomposes derived state. `toggle-language` and [`App::set_language`]
+    /// both land here.
+    fn apply_language(&self, lang: Lang) {
+        let t = i18n::table(lang);
+        self.window.set_ui_font(t.ui_font.into());
+        self.window.set_rtl(t.rtl);
+        // Brand name stays Latin in both languages (D12).
+        self.window.set_t_title("Micro-Vocal Lab".into());
+        self.window.set_t_version(format!("v{VERSION}").into());
+        self.window.set_t_waveform_empty(t.waveform_empty.into());
+        self.window.set_t_pitch(t.pitch.into());
+        self.window.set_t_air(t.air.into());
+        self.window.set_t_formant(t.formant.into());
+        self.window.set_t_record(t.record.into());
+        self.window.set_t_export_title(t.export_title.into());
+        self.window.set_t_export_go(t.export_go.into());
+        self.window.set_t_bitrate(t.bitrate.into());
+        self.window.set_t_language(t.language_label.into());
+        self.recompose_base_status();
+        self.compose_status(None);
+        self.refresh();
+    }
+
+    /// The string table for the active language.
+    fn t(&self) -> i18n::StrTable {
+        i18n::table(self.lang.get())
+    }
+
+    /// Wraps a technical/numeric fragment in LTR marks when the UI runs
+    /// RTL so bidi never reorders it inside Arabic text (no-op in English).
+    fn num(&self, s: String) -> String {
+        match self.lang.get() {
+            Lang::En => s,
+            Lang::Ar => i18n::isolate_ltr(&s),
+        }
+    }
+
+    /// Formats a status template and shows it as the transient part of
+    /// the status line.
+    fn status(&self, template: &str, values: &[(&str, String)]) {
+        self.compose_status(Some(&i18n::tpl(template, values)));
+    }
+
+    /// The "loaded project" base status line in the active language.
+    fn loaded_line(&self) -> String {
+        let t = self.t();
+        let borrowed = self.session.borrow();
+        let Some(s) = borrowed.as_ref() else {
+            return String::new();
+        };
+        if let Some(err) = &s.track_error {
+            return i18n::tpl(t.status_track_failed, &[("error", self.num(err.clone()))]);
+        }
+        let (f0, voiced) = match &s.track {
+            Some(track) => (track.median_f0(), track.voiced_ratio()),
+            None => (0.0, 0.0),
+        };
+        i18n::tpl(
+            t.status_loaded,
+            &[
+                ("name", s.name.clone()),
+                ("frames", self.num(s.buffer.frames().to_string())),
+                ("sr", self.num(s.buffer.sample_rate().to_string())),
+                ("f0", self.num(format!("{f0:.1}"))),
+                ("voiced", self.num(format!("{:.0}", voiced * 100.0))),
+            ],
+        )
+    }
+
+    /// Rebuilds the base status line from the current state + language
+    /// (project loaded → loaded/track-failed line, else the ready line).
+    fn recompose_base_status(&self) {
+        let base = match self.session.borrow().as_ref() {
+            Some(_) => self.loaded_line(),
+            None => i18n::tpl(self.t().status_ready, &[("version", format!("v{VERSION}"))]),
+        };
+        *self.base_status.borrow_mut() = base;
     }
 
     // ── Parameter application ────────────────────────────────────────
@@ -331,14 +435,6 @@ impl App {
     /// Loads a project buffer (analyzing the pYIN track) and shows it.
     pub fn load_audio(&self, buffer: AudioBuffer, name: &str) {
         let session = Session::load(buffer, name.to_string(), true);
-        let sr = session.buffer.sample_rate();
-        let ch = session.buffer.channels();
-        let frames = session.buffer.frames();
-        let (f0, voiced) = match &session.track {
-            Some(t) => (t.median_f0(), t.voiced_ratio()),
-            None => (0.0, 0.0),
-        };
-        let track_error = session.track_error.clone();
         self.session.replace(Some(session));
 
         // New project: invalidate the previous render, keep parameters.
@@ -349,16 +445,7 @@ impl App {
 
         self.window.set_has_audio(true);
         self.window.set_has_project(true);
-        self.window
-            .set_track_label(SharedString::from(format!("{name} — {sr} Hz · {ch} ch")));
-        *self.base_status.borrow_mut() = format!(
-            "{name} · {frames} frames @ {sr} Hz · median F0 {f0:.1} Hz · voiced {:.0} %",
-            voiced * 100.0
-        );
-        if let Some(err) = track_error {
-            *self.base_status.borrow_mut() =
-                format!("pitch analysis failed ({err}) — waveform shown without F0 overlay");
-        }
+        self.recompose_base_status();
         self.sync_param_ui();
         self.compose_status(None);
         self.refresh();
@@ -397,12 +484,19 @@ impl App {
                     params: self.params.get(),
                 });
                 self.window.set_can_preview(true);
-                self.compose_status(Some(&format!(
-                    "preview rendered in {render_ms:.0} ms ({})",
-                    stages_label(&self.params.get())
-                )));
+                let stages = self.stages_label(&self.params.get());
+                self.status(
+                    self.t().status_rendered,
+                    &[
+                        ("ms", self.num(format!("{render_ms:.0}"))),
+                        ("stages", stages),
+                    ],
+                );
             }
-            None => self.compose_status(Some("render failed")),
+            None => self.status(
+                self.t().status_render_failed,
+                &[("error", "unknown".into())],
+            ),
         }
         self.dirty.set(false);
         self.refresh();
@@ -413,7 +507,7 @@ impl App {
         if self.session.borrow().is_none() {
             return;
         }
-        self.compose_status(Some("rendering…"));
+        self.compose_status(Some(self.t().status_rendering));
         let weak = self.self_weak.borrow().clone();
         self.render_timer.borrow_mut().start(
             slint::TimerMode::SingleShot,
@@ -505,12 +599,13 @@ impl App {
                 match msg {
                     RenderDone::Ok(pr) => {
                         let ms = pr.render_ms;
-                        let label = stages_label(&pr.params);
+                        let label = app.stages_label(&pr.params);
                         *app.preview.borrow_mut() = Some(*pr);
                         app.window.set_can_preview(true);
-                        app.compose_status(Some(&format!(
-                            "preview rendered in {ms:.0} ms ({label})"
-                        )));
+                        app.status(
+                            app.t().status_rendered,
+                            &[("ms", app.num(format!("{ms:.0}"))), ("stages", label)],
+                        );
                         // A queued parameter change re-renders immediately.
                         if let Some(next) = app.pending.lock().expect("pending lock").take() {
                             app.params.set(next);
@@ -521,7 +616,7 @@ impl App {
                         }
                     }
                     RenderDone::Failed(e) => {
-                        app.compose_status(Some(&format!("render failed: {e}")));
+                        app.status(app.t().status_render_failed, &[("error", app.num(e))]);
                     }
                 }
             },
@@ -540,10 +635,16 @@ impl App {
                         .unwrap_or_else(|| path.display().to_string());
                     self.load_audio(buffer, &name);
                 }
-                Err(e) => self.compose_status(Some(&format!("import failed: {e}"))),
+                Err(e) => self.status(
+                    self.t().status_import_failed,
+                    &[("error", self.num(e.to_string()))],
+                ),
             },
             Ok(None) => {}
-            Err(e) => self.compose_status(Some(&format!("import dialog failed: {e}"))),
+            Err(e) => self.status(
+                self.t().status_dialog_failed,
+                &[("error", self.num(e.to_string()))],
+            ),
         }
     }
 
@@ -564,7 +665,10 @@ impl App {
             Ok(Some(p)) => p,
             Ok(None) => return,
             Err(e) => {
-                self.compose_status(Some(&format!("export dialog failed: {e}")));
+                self.status(
+                    self.t().status_dialog_failed,
+                    &[("error", self.num(e.to_string()))],
+                );
                 self.window.set_export_open(false);
                 return;
             }
@@ -588,7 +692,10 @@ impl App {
         let rendered = match rendered {
             Ok(b) => b,
             Err(e) => {
-                self.compose_status(Some(&format!("render failed: {e}")));
+                self.status(
+                    self.t().status_render_failed,
+                    &[("error", self.num(e.to_string()))],
+                );
                 return;
             }
         };
@@ -604,12 +711,20 @@ impl App {
             mvl_audio::export_wav(&path, &rendered, depth)
         };
         match written {
-            Ok(()) => self.compose_status(Some(&format!(
-                "exported {} ({:.0} ms)",
-                path.display(),
-                t0.elapsed().as_secs_f64() * 1000.0
-            ))),
-            Err(e) => self.compose_status(Some(&format!("export failed: {e}"))),
+            Ok(()) => self.status(
+                self.t().status_exported,
+                &[
+                    ("path", self.num(path.display().to_string())),
+                    (
+                        "ms",
+                        self.num(format!("{:.0}", t0.elapsed().as_secs_f64() * 1000.0)),
+                    ),
+                ],
+            ),
+            Err(e) => self.status(
+                self.t().status_export_failed,
+                &[("error", self.num(e.to_string()))],
+            ),
         }
     }
 
@@ -632,9 +747,10 @@ impl App {
                 *self.player.borrow_mut() = Some(p);
             })
         {
-            self.compose_status(Some(&format!(
-                "playback unavailable ({e}) — export still works"
-            )));
+            self.status(
+                self.t().status_no_playback,
+                &[("error", self.num(e.to_string()))],
+            );
             return;
         }
         let transport = self
@@ -672,7 +788,10 @@ impl App {
             }
         };
         if let Err(e) = result {
-            self.compose_status(Some(&format!("playback failed: {e}")));
+            self.status(
+                self.t().status_playback_failed,
+                &[("error", self.num(e.to_string()))],
+            );
         }
     }
 
@@ -687,16 +806,27 @@ impl App {
                         let sr = buffer.sample_rate();
                         let ch = buffer.channels();
                         self.load_audio(buffer, "recording");
-                        self.compose_status(Some(&format!(
-                            "recorded {secs:.1} s @ {sr} Hz · {ch} ch{}",
-                            if overflow {
-                                " · OVERFLOW: some input was dropped"
-                            } else {
-                                ""
-                            }
-                        )));
+                        self.status(
+                            self.t().status_recorded,
+                            &[
+                                ("secs", self.num(format!("{secs:.1}"))),
+                                ("rate", self.num(sr.to_string())),
+                                ("ch", self.num(ch.to_string())),
+                                (
+                                    "overflow",
+                                    if overflow {
+                                        i18n::overflow(self.lang.get()).to_string()
+                                    } else {
+                                        String::new()
+                                    },
+                                ),
+                            ],
+                        );
                     }
-                    Err(e) => self.compose_status(Some(&format!("capture failed: {e}"))),
+                    Err(e) => self.status(
+                        self.t().status_capture_failed,
+                        &[("error", self.num(e.to_string()))],
+                    ),
                 }
             }
             return;
@@ -711,18 +841,26 @@ impl App {
                 let matched = info.matched_preferred_rate;
                 *self.record_started.borrow_mut() = Some(Instant::now());
                 *self.recorder.borrow_mut() = Some(recorder);
-                self.compose_status(Some(&format!(
-                    "recording @ {} Hz{}",
-                    info.sample_rate,
-                    if matched {
-                        ""
-                    } else {
-                        " (device capped — 192 kHz unavailable)"
-                    }
-                )));
+                self.status(
+                    self.t().status_recording,
+                    &[
+                        ("rate", self.num(info.sample_rate.to_string())),
+                        (
+                            "cap",
+                            if matched {
+                                String::new()
+                            } else {
+                                i18n::record_cap(self.lang.get()).to_string()
+                            },
+                        ),
+                    ],
+                );
             }
             Err(e) => {
-                self.compose_status(Some(&format!("recording unavailable ({e})")));
+                self.status(
+                    self.t().status_no_record,
+                    &[("error", self.num(e.to_string()))],
+                );
             }
         }
     }
@@ -734,8 +872,11 @@ impl App {
         if recording {
             if let Some(start) = *self.record_started.borrow() {
                 let secs = start.elapsed().as_secs_f64();
-                self.window
-                    .set_time_readout(format!("\u{25cf} REC {}", fmt_time(secs)).into());
+                // The ● REC label follows the table; the clock is an LTR
+                // island in both languages.
+                self.window.set_time_readout(
+                    format!("\u{25cf} {} {}", self.t().record, self.num(fmt_time(secs))).into(),
+                );
             }
             return;
         }
@@ -752,8 +893,8 @@ impl App {
             .as_ref()
             .map_or(0.0, |s| s.duration_secs());
         let pos = player.position_secs().min(duration);
-        self.window
-            .set_time_readout(format!("{} / {}", fmt_time(pos), fmt_time(duration)).into());
+        let readout = self.num(format!("{} / {}", fmt_time(pos), fmt_time(duration)));
+        self.window.set_time_readout(readout.into());
         if transport == mvl_audio::Transport::Playing {
             self.set_playhead(pos);
         }
@@ -826,6 +967,9 @@ impl App {
             return;
         };
 
+        let t = self.t();
+        let name = s.name.clone();
+
         // A/B: the preview shows the rendered pyramid without the input
         // analysis overlay (tint/trace describe the *input*, not the
         // render).
@@ -836,14 +980,14 @@ impl App {
                     &pr.mono,
                     None,
                     PREVIEW_COLORS,
-                    format!("{} — preview (rendered)", s.name),
+                    i18n::tpl(t.track_preview, &[("name", name)]),
                 ),
                 None => (
                     &s.pyramid,
                     &s.mono,
                     s.track.as_deref(),
                     STUDIO_COLORS,
-                    format!("{} — original", s.name),
+                    i18n::tpl(t.track_original, &[("name", name)]),
                 ),
             }
         } else {
@@ -852,7 +996,7 @@ impl App {
                 &s.mono,
                 s.track.as_deref(),
                 STUDIO_COLORS,
-                format!("{} — original", s.name),
+                i18n::tpl(t.track_original, &[("name", name)]),
             )
         };
 
@@ -873,8 +1017,11 @@ impl App {
         self.window.set_track_label(label.into());
 
         let (a, b) = s.view_secs();
+        // The span itself is a Latin engineering fragment; the localized
+        // prefix + LTR isolation keep it stable in RTL.
+        let span = fmt_span(b - a);
         self.window
-            .set_zoom_label(SharedString::from(fmt_span(b - a)));
+            .set_zoom_label(format!("{} {}", t.view_label, self.num(span)).into());
     }
 
     fn zoom(&self, factor: f64, anchor: f64) {
@@ -929,19 +1076,22 @@ fn stages_of(p: &EngineParams) -> [bool; 3] {
     ]
 }
 
-fn stages_label(p: &EngineParams) -> String {
-    let s = stages_of(p);
-    let names = ["pitch", "formant", "air"];
-    let applied: Vec<&str> = names
-        .iter()
-        .zip(s.iter())
-        .filter(|(_, on)| **on)
-        .map(|(n, _)| *n)
-        .collect();
-    if applied.is_empty() {
-        "neutral".into()
-    } else {
-        applied.join(" → ")
+impl App {
+    /// Human-readable stage list for the render report (localized;
+    /// empty → the neutral label).
+    fn stages_label(&self, p: &EngineParams) -> String {
+        let active = stages_of(p);
+        let applied: Vec<&str> = i18n::stages(self.lang.get())
+            .iter()
+            .zip(active.iter())
+            .filter(|(_, on)| **on)
+            .map(|(name, _)| *name)
+            .collect();
+        if applied.is_empty() {
+            self.t().neutral.into()
+        } else {
+            applied.join(" → ")
+        }
     }
 }
 
@@ -966,13 +1116,14 @@ fn fmt_time(secs: f64) -> String {
     format!("{m}:{s:02}.{ms:03}")
 }
 
-/// Formats a view span for the zoom readout.
+/// Formats a view span for the zoom readout (bare engineering fragment;
+/// the localized "view"/"عرض" prefix is added by the caller).
 fn fmt_span(secs: f64) -> String {
     if secs >= 1.0 {
-        format!("view {secs:.2} s")
+        format!("{secs:.2} s")
     } else if secs >= 0.001 {
-        format!("view {:.1} ms", secs * 1000.0)
+        format!("{:.1} ms", secs * 1000.0)
     } else {
-        format!("view {:.0} µs", secs * 1_000_000.0)
+        format!("{:.0} µs", secs * 1_000_000.0)
     }
 }

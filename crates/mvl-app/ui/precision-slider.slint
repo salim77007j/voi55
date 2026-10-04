@@ -35,6 +35,9 @@ export component PrecisionSlider inherits Rectangle {
     in property <string> readout;
     /// Disabled until a project is loaded.
     in property <bool> enabled: true;
+    /// RTL mode: mirrors the label/readout row (the groove keeps LTR
+    /// geometry — same disclosed policy as the DAW timeline).
+    in property <bool> rtl: false;
 
     // ── Value ────────────────────────────────────────────────────────
     in-out property <float> value: self.neutral;
@@ -75,20 +78,22 @@ export component PrecisionSlider inherits Rectangle {
             padding: Tokens.sp-1;
             spacing: Tokens.sp-half;
 
-            // Label + value readout.
+            // Label + value readout (mirrored in RTL; groove stays LTR).
             HorizontalLayout {
                 height: 18px;
                 spacing: Tokens.sp-half;
 
                 Text {
+                    layout-order: root.rtl ? 2 : 0;
                     text: root.label;
                     color: Tokens.text-muted;
                     vertical-alignment: center;
                 }
 
-                Rectangle {} // spring
+                Rectangle { layout-order: 1; } // spring
 
                 Text {
+                    layout-order: root.rtl ? 0 : 2;
                     text: root.readout;
                     color: Tokens.text-primary;
                     font-weight: 600;

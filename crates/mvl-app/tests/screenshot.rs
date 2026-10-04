@@ -7,6 +7,7 @@
 //! function, in order.
 
 use mvl_app::headless;
+use mvl_app::i18n::Lang;
 use slint::platform::software_renderer::PremultipliedRgbaColor;
 
 /// Studio Graphite tokens (D13) — duplicated here on purpose: the assert
@@ -46,6 +47,8 @@ fn headless_ui_renders_and_drives_the_engine() {
         air: None,
         formant: None,
         preview: false,
+        lang: Lang::En,
+        export_panel: false,
     };
     headless::render_to_png(&shell_args, |_app| Ok(())).expect("shell render");
     let buf = decode(&shell_args.out);
@@ -80,6 +83,8 @@ fn headless_ui_renders_and_drives_the_engine() {
         air: Some(5.5),
         formant: Some(140.0),
         preview: false,
+        lang: Lang::En,
+        export_panel: false,
     };
     let mut params_out = None;
     headless::render_to_png(&slider_args, |app| {
@@ -142,6 +147,8 @@ fn headless_ui_renders_and_drives_the_engine() {
         air: Some(0.0),
         formant: Some(160.0),
         preview: false,
+        lang: Lang::En,
+        export_panel: false,
     };
     // SAFETY: the only env readers in this binary run inside the
     // render_to_png closures below, all on this thread.
@@ -171,6 +178,55 @@ fn headless_ui_renders_and_drives_the_engine() {
     );
     assert_eq!(reimported.sample_rate(), 48_000);
     let _ = std::fs::remove_file(&export_path);
+
+    // ── Step 4: Arabic RTL — mirrored layout, Arabic font, real switch ─
+    let ar_args = headless::ScreenshotArgs {
+        out: dir.join("shell-ar.png"),
+        width: 1280,
+        height: 800,
+        demo: Some("synth".into()),
+        open: None,
+        playhead: None,
+        window_secs: None,
+        pitch: Some(4.0),
+        air: Some(5.5),
+        formant: Some(140.0),
+        preview: false,
+        lang: Lang::Ar,
+        export_panel: false,
+    };
+    let mut ar_status = None;
+    headless::render_to_png(&ar_args, |app| {
+        app.set_language(Lang::Ar);
+        assert_eq!(app.lang(), Lang::Ar);
+        let buffer = mvl_app::session::demo_vocal().map_err(|e| e.to_string())?;
+        app.load_audio(buffer, "demo-vocal (synth)");
+        app.set_params_and_render(4.0, 5.5, 140.0);
+        // The status line must be Arabic (RTL flag from the table).
+        assert!(app.status_line().contains('\u{0645}'));
+        ar_status = Some(app.status_line());
+        Ok(())
+    })
+    .expect("arabic render");
+    eprintln!("ar status: {ar_status:?}");
+
+    // The RTL header must differ from the LTR one (mirrored layout +
+    // Arabic glyphs): compare the 56 px header band pixel-by-pixel.
+    let en = decode(&dir.join("sliders.png"));
+    let ar = decode(&ar_args.out);
+    let mut header_diff = 0;
+    for y in 0..56 {
+        for x in 0..1280 {
+            let i = (y * 1280 + x) * 4;
+            if en[i] != ar[i] || en[i + 1] != ar[i + 1] || en[i + 2] != ar[i + 2] {
+                header_diff += 1;
+            }
+        }
+    }
+    assert!(
+        header_diff > 500,
+        "RTL header must visibly differ from LTR ({header_diff} px)"
+    );
 }
 
 /// Verify the pixel-format round-trip of the un-premultiply helper used by

@@ -20,6 +20,8 @@ use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use crate::i18n::Lang;
+
 thread_local! {
     /// The installed headless platform. Slint installs a platform once per
     /// thread; subsequent renders swap in a fresh window instead.
@@ -77,6 +79,11 @@ pub struct ScreenshotArgs {
     pub formant: Option<f64>,
     /// `--preview` — show the A/B preview view instead of the original.
     pub preview: bool,
+    /// `--lang en|ar` — UI language (ar renders the RTL mirrored layout).
+    pub lang: Lang,
+    /// `--export-panel` — open the export panel (the same property the
+    /// export button toggles).
+    pub export_panel: bool,
 }
 
 /// Parses `--screenshot --out PATH [flags]`.
@@ -98,11 +105,20 @@ pub fn parse_args(args: &[String]) -> Result<ScreenshotArgs, String> {
     let mut air = None;
     let mut formant = None;
     let mut preview = false;
+    let mut lang = Lang::En;
+    let mut export_panel = false;
     let mut it = args.iter().map(String::as_str);
     while let Some(a) = it.next() {
         match a {
             "--screenshot" => {} // mode selector, already consumed
             "--preview" => preview = true,
+            "--export-panel" => export_panel = true,
+            "--lang" => {
+                lang = it
+                    .next()
+                    .and_then(|v| v.parse().ok())
+                    .ok_or("--lang needs en|ar")?
+            }
             "--out" => out = it.next().map(PathBuf::from),
             "--width" => {
                 width = it
@@ -168,6 +184,8 @@ pub fn parse_args(args: &[String]) -> Result<ScreenshotArgs, String> {
         air,
         formant,
         preview,
+        lang,
+        export_panel,
     })
 }
 

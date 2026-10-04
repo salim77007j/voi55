@@ -2,7 +2,8 @@
 //!
 //! Modes:
 //! - **GUI** (default): the Slint window (Studio Graphite) on the platform
-//!   backend (winit/femtovg on desktop). `--open FILE` loads audio first.
+//!   backend (winit/femtovg on desktop). `--open FILE` loads audio first,
+//!   `--lang en|ar` picks the UI language (Arabic renders RTL).
 //! - `--screenshot --out P [flags]`: renders the real UI headlessly into a
 //!   PNG (evidence pipeline, D14; also drives `tests/screenshot.rs`).
 //! - `--selftest-audio`: legacy Phase 2 playback self-test, kept for CI.
@@ -78,6 +79,8 @@ fn load_flagged(
 fn screenshot_mode(args: &[String]) -> Result<(), String> {
     let parsed = headless::parse_args(args)?;
     headless::render_to_png(&parsed, |app| {
+        // Language first: all later status lines come out in that table.
+        app.set_language(parsed.lang);
         load_flagged(app, parsed.demo.as_deref(), parsed.open.as_deref())?;
         if let Some(secs) = parsed.window_secs {
             app.set_view_window_secs(secs);
@@ -95,6 +98,10 @@ fn screenshot_mode(args: &[String]) -> Result<(), String> {
         if parsed.preview {
             app.toggle_preview();
         }
+        if parsed.export_panel {
+            // Same property the export button toggles (no-fake-UI).
+            app.window().set_export_open(true);
+        }
         Ok(())
     })?;
     println!("Screenshot written: {}", parsed.out.display());
@@ -110,6 +117,17 @@ fn gui_mode(args: &[String]) -> Result<(), String> {
         .and_then(|i| args.get(i + 1));
     if let Some(path) = open {
         load_flagged(&app, None, Some(std::path::Path::new(path)))?;
+    }
+    // --lang en|ar (GUI): switch strings/font/direction before showing.
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--lang" {
+            let value = it.next().ok_or("--lang needs a value (en|ar)")?;
+            let lang: mvl_app::i18n::Lang = value
+                .parse()
+                .map_err(|_| format!("--lang: {value:?} is not en|ar"))?;
+            app.set_language(lang);
+        }
     }
     app.window()
         .show()

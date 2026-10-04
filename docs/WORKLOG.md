@@ -60,3 +60,51 @@ round-trip unit tests. Commit after each sub-item.
 - **Quality at HEAD:** 81 tests green (49 core + 32 audio); fmt + clippy -D warnings clean workspace-wide; forbid(unsafe) in core; no unwrap/expect on user/audio data in production paths.
 - **Honest gaps:** synthetic fixtures only (no mic in sandbox — real-vocal validation deferred to Phase 5/6); PSOLA sub-harmonic content at non-integer ratios (disclosed); vibrato >±3% leaks into the residual; breath detector is a heuristic.
 - NEXT: Phase 4 — Slint UI (EN LTR + AR RTL, waveform zoom, three sliders wired to pipeline::render, No-Fake-UI audit) awaits the explicit "continue".
+
+## 2026-10-04 — Phase 4.1–4.4 (entries backfilled at 4.5; per-sub-item commits in git log)
+
+- **4.1 (bfda300)** Slint scaffold: Studio Graphite shell (D13 tokens), embedded
+  Inter + IBM Plex Sans Arabic (D12), headless screenshot platform + PNG evidence
+  pipeline; `mvl-app` split lib+bin. 83 tests.
+- **4.2 (bbc7a64)** Waveform engine: min/max/power pyramid (adaptive bin), peak/RMS
+  columns, voiced tint + F0 trace from shared pYIN, wheel-zoom/drag-pan + zoom
+  controls, playhead overlay, session module, `--demo/--open/--window/--playhead`
+  evidence flags. 91 tests.
+- **4.3 (fa9eabc)** Precision sliders → engine: drag/keyboard/double-click-reset,
+  1¢/0.1 dB/1 mm steps, EngineParams clamp+echo, 250 ms debounced background
+  render via cached pYIN, A/B preview toggle, render timing in status bar. 93 tests.
+- **4.4 (6d0672a)** Transport + import/export + recording (No-Fake-UI):
+  play/pause/stop/rewind via cpal Player (lazy connect, honest no-device status),
+  Recorder with overflow disclosure, WAV f32/24/16 + MP3 128–320 export panel with
+  fresh non-destructive render, import via rfd (xdg-portal) with
+  `MVL_OPEN_FILE`/`MVL_SAVE_FILE` automation override, export round-trip test.
+
+## 2026-10-04 — Phase 4.5: i18n — runtime EN LTR ↔ AR RTL switch (D1/D12)
+
+- `i18n.rs`: explicit EN/AR string tables (no gettext dep) — every user-visible
+  string, per-language UI font (Inter / IBM Plex Sans Arabic), `rtl` flag,
+  localized render-report stage names; `{key}` template fill; LRM (U+200E) LTR
+  isolation for numeric/technical fragments inside Arabic text; device-cap and
+  overflow suffixes localized. Western digits kept for engineering readouts in
+  both directions (D12); unit symbols st/dB/mm/Hz stay Latin (disclosed scope).
+- `app.rs`: `Lang` state + `set_language`/`apply_language`; all status lines,
+  track labels, zoom readout, REC clock composed through the active table;
+  language switch rebuilds base status from the session and drops transient
+  extras (documented); `toggle-language` chip wired (affordance shows the target
+  language: EN UI shows "عربي", AR UI shows "EN").
+- RTL mirroring: exact-mirror `layout-order` schemes fixed in header, transport
+  bar (play button stays on its mirrored slot; glyphs keep playback-direction
+  meaning), status bar, slider row, and slider label/readout rows. Groove and
+  DAW timeline stay LTR by policy (disclosed). Export panel anchoring now
+  direction-aware.
+- **Bug found & fixed (No-Fake-UI):** the export panel rendered *under* the
+  waveform well (later layout siblings paint over a header child that overflows
+  the 56 px header) — invisible since 4.4. Moved to a window-level overlay
+  (last child → paints on top); EN + AR verified in evidence PNGs.
+- `--lang en|ar` for GUI and `--screenshot` (+ `--export-panel` evidence flag);
+  screenshot test gains an AR step (Arabic status line asserted, RTL header
+  pixel-diff vs LTR > 500 px).
+- Evidence: `docs/evidence/phase4/` — 6 PNGs (EN shell/demo/preview/export,
+  AR RTL demo/export).
+- Quality at HEAD: 97 tests green (50 core + 33 audio + 14 app incl. 4-step
+  screenshot integration); fmt + clippy `-D warnings` clean workspace-wide.
