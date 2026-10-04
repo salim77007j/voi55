@@ -1,0 +1,16 @@
+# Valgrind suppressions for Micro-Vocal Lab (nightly memory-check workflow).
+#
+# Scope: third-party fontconfig charset caches only. The Slint font stack
+# (fontique) asks fontconfig for per-script character sets; fontconfig
+# caches those allocations for the process lifetime and frees them only in
+# FcFini(), which the font stack never calls — the OS reclaims them at
+# exit. Reviewed against the Phase 5 run: 592 B definite + 64 B indirect,
+# every record passing through FcCharSetAddChar. First-party code (DSP,
+# buffers, app state) is leak-free; this gate stays on real regressions.
+{
+   fontconfig-charset-cache
+   Memcheck:Leak
+   match-leak-kinds: definite,indirect
+   ...
+   fun:FcCharSetAddChar
+}

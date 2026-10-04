@@ -61,11 +61,13 @@ jobs:
 
       # The full UI stack (platform init, session load + pYIN, waveform
       # render, PNG encode, teardown) under memcheck. Definite leaks fail
-      # the job.
+      # the job — except the reviewed third-party fontconfig charset
+      # caches (see .github/valgrind-suppress.supp).
       - name: Valgrind the headless screenshot run
         run: |
           valgrind --leak-check=full --show-leak-kinds=definite \
                    --errors-for-leak-kinds=definite --error-exitcode=99 \
+                   --suppressions=.github/valgrind-suppress.supp \
                    target/debug/micro-vocal-lab --screenshot --demo synth --out vg-smoke.png
           test -s vg-smoke.png
 

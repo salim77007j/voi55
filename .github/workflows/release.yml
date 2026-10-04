@@ -70,17 +70,27 @@ jobs:
           fi
 
       - name: Bundle (binary + README + LICENSE)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           dir="micro-vocal-lab-${{ matrix.os }}"
           mkdir "$dir"
           cp "target/release/${{ matrix.binary }}" "$dir/"
           cp README.md LICENSE "$dir/"
-          if [ "${{ matrix.bundle }}" = "zip" ]; then
-            zip -r "$dir.zip" "$dir"
-          else
-            tar czf "$dir.tar.gz" "$dir"
-          fi
+          tar czf "$dir.tar.gz" "$dir"
+
+      # windows-latest runners ship no `zip`; PowerShell's Compress-Archive
+      # produces the same artifact without extra dependencies.
+      - name: Bundle (binary + README + LICENSE)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dir = "micro-vocal-lab-${{ matrix.os }}"
+          New-Item -ItemType Directory -Path $dir | Out-Null
+          Copy-Item "target/release/${{ matrix.binary }}" $dir/
+          Copy-Item README.md $dir/
+          Copy-Item LICENSE $dir/
+          Compress-Archive -Path $dir -DestinationPath "$dir.zip"
 
       - name: Upload bundle
         uses: actions/upload-artifact@v4
