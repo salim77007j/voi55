@@ -233,3 +233,33 @@ round-trip unit tests. Commit after each sub-item.
   fmt + clippy `-D warnings` clean workspace-wide.
 - NEXT: tag `v1.0.0-rc.1` (fires the release workflow); then the hardware
   protocols on real machines → final `v1.0.0`.
+
+## 2026-10-04 — Phase 6.5: version 1.0.0-rc.1 (57b232b)
+
+- Workspace version → `1.0.0-rc.1` (Cargo.toml + Cargo.lock). The rc
+  marks the complete feature set with every sandbox gate green; final
+  `v1.0.0` signs off on the real-hardware protocols (§3/§4) — this
+  environment has no microphone, audio device or display, and the
+  honesty policy forbids a final tag before someone has heard it.
+
+## 2026-10-04 — Release workflow fix + rc.1 publish confirmation (f381b49)
+
+- First `v1.0.0-rc.1` tag push failed the release job at the
+  `GH Release` step (missing `contents:write`); the workflow now grants
+  it and the re-run succeeded.
+- Publish state verified via the GitHub API: release `v1.0.0-rc.1`
+  exists, marked prerelease, with all three artifacts attached —
+  `micro-vocal-lab-ubuntu-latest.tar.gz` (10.4 MB),
+  `micro-vocal-lab-windows-latest.zip` (7.7 MB),
+  `micro-vocal-lab-macos-latest.tar.gz` (7.0 MB) — all far under the
+  50 MB budget.
+- Out-of-CI smoke of the published Linux artifact: downloaded the asset
+  via the API (Accept: application/octet-stream), unpacked
+  (binary 23.8 MB + LICENSE + README), ran `--screenshot --demo synth`
+  headlessly — exit 0, valid 1280×800 PNG, full Studio Graphite shell
+  (three precision sliders, waveform + F0 trace, transport, عربي
+  switch, "v1.0.0-rc.1" title). The published artifact runs.
+- REMAINING for `v1.0.0`: run the §3 real-hardware protocols and the §4
+  native-Arabic review on real machines (user-side), triage any
+  failure, then tag `v1.0.0`. No further sandbox-side code work is
+  planned unless a hardware run finds something.
