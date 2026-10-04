@@ -2794,7 +2794,7 @@ dependencies = [
 
 [[package]]
 name = "mvl-app"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "mvl-audio",
  "mvl-core",
@@ -2806,7 +2806,7 @@ dependencies = [
 
 [[package]]
 name = "mvl-audio"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "cpal",
  "hound",
@@ -2819,7 +2819,7 @@ dependencies = [
 
 [[package]]
 name = "mvl-core"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "hound",
  "realfft",
