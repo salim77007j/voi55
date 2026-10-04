@@ -91,7 +91,7 @@ pub fn plan_capture(candidates: &[ConfigCandidate], preferred_rate: u32) -> Opti
             (c.max_rate, false)
         };
         let r = rank(c, rate, matched);
-        if best_rank.map_or(true, |current| r < current) {
+        if best_rank.is_none_or(|current| r < current) {
             best = Some((c, rate, matched));
             best_rank = Some(r);
         }
@@ -297,7 +297,7 @@ where
     let err_shared = Arc::clone(&shared);
     device
         .build_input_stream(
-            config.clone(),
+            *config,
             move |data: &[T], _: &cpal::InputCallbackInfo| {
                 let Ok(mut state) = shared.lock() else {
                     return; // poisoned: nothing safe to do in the RT thread
