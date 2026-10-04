@@ -39,3 +39,12 @@ round-trip unit tests. Commit after each sub-item.
 - `crates/mvl-app`: `micro-vocal-lab` binary stub (version report; Slint UI in Phase 4).
 - Sandbox note: no sudo/ALSA headers → local ALSA 1.2.14 prefix extracted from Debian debs at `/home/z/my-project/.alsa-prefix`, wired via `scripts/env.sh` (PKG_CONFIG_PATH + LD_LIBRARY_PATH). Verified cpal 0.18 links against it. Real Linux machines need only `libasound2-dev`.
 - cargo fmt + clippy -D warnings clean; 12 tests green.
+
+## 2026-10-04 — Phase 2.4: MP3 import/export + offline resampler
+
+- `mp3.rs`: import via symphonia 0.6 (probe handles ID3v2; planar→interleaved f32 for F32/F64/S16/S32/U8/S8 outputs), export via LAME 0.2.5 (`Builder`, planar Mono/DualPcm, CBR 128–320, `FlushNoGap`, explicit byte-budget reserve because `encode_to_vec` writes into spare capacity only).
+- `resample.rs`: windowed-sinc offline resampler (Hann, 24 zero-crossings, f64 accumulate) — needed because MP3 tops out at 48 kHz. Round-trip SNR + exact-length tests.
+- mp3_target_rate(): 192k/96k→48k mapping, unit-tested.
+- Tests: MP3 mono 44.1k round-trip (offset-search SNR > 20 dB), stereo 192k→48k decode verification, garbage-file safety, rate mapping.
+- Key API learnings recorded for Phase 3: symphonia 0.6 = enum CodecParameters + registry factory + planar AudioBuffer<f32>; LAME = spare-capacity output.
+- 33 tests green; fmt + clippy -D warnings clean.

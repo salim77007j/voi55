@@ -35,6 +35,10 @@ pub enum AudioError {
     #[error("codec error: {0}")]
     Codec(String),
 
+    /// Failure surfaced by the symphonia decode stack.
+    #[error("decode error: {0}")]
+    Symphonia(#[from] symphonia::core::errors::Error),
+
     /// Filesystem / std I/O failure.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
