@@ -1,0 +1,17 @@
+# Rust build
+/target
+**/target
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local build artifacts and temp audio
+*.tmp
+/tmp/

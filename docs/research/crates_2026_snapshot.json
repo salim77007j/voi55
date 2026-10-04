@@ -1,0 +1,183 @@
+{
+  "captured_at_utc": "2026-10-04T02:21:14Z",
+  "source": "https://crates.io/api/v1/crates/{name}",
+  "purpose": "Micro-Vocal Lab Phase 1 ecosystem research evidence",
+  "crates": [
+    {
+      "crate": "slint",
+      "max_stable_version": "1.18.1",
+      "newest_version_published": "2026-09-21",
+      "total_downloads": 1821391,
+      "description": "GUI toolkit to efficiently develop fluid graphical user interfaces for embedded devices an"
+    },
+    {
+      "crate": "iced",
+      "max_stable_version": "0.14.0",
+      "newest_version_published": "2025-12-07",
+      "total_downloads": 2878168,
+      "description": "A cross-platform GUI library inspired by Elm"
+    },
+    {
+      "crate": "egui",
+      "max_stable_version": "0.36.2",
+      "newest_version_published": "2026-09-08",
+      "total_downloads": 25106870,
+      "description": "An easy-to-use immediate mode GUI that runs on both web and native"
+    },
+    {
+      "crate": "tauri",
+      "max_stable_version": "2.12.1",
+      "newest_version_published": "2026-10-01",
+      "total_downloads": 34052149,
+      "description": "Make tiny, secure apps for all desktop platforms with Tauri"
+    },
+    {
+      "crate": "cpal",
+      "max_stable_version": "0.18.2",
+      "newest_version_published": "2026-08-16",
+      "total_downloads": 22801442,
+      "description": "Low-level cross-platform audio I/O library."
+    },
+    {
+      "crate": "rodio",
+      "max_stable_version": "0.22.2",
+      "newest_version_published": "2026-03-05",
+      "total_downloads": 12206732,
+      "description": "Audio playback and recording library"
+    },
+    {
+      "crate": "hound",
+      "max_stable_version": "3.5.1",
+      "newest_version_published": "2023-09-25",
+      "total_downloads": 19863717,
+      "description": "A wav encoding and decoding library"
+    },
+    {
+      "crate": "symphonia",
+      "max_stable_version": "0.6.1",
+      "newest_version_published": "2026-08-13",
+      "total_downloads": 15734465,
+      "description": "Pure Rust media container and audio decoding library."
+    },
+    {
+      "crate": "minimp3",
+      "max_stable_version": "0.6.1",
+      "newest_version_published": "2025-08-15",
+      "total_downloads": 1794399,
+      "description": "Rust bindings with a high-level wrapper for the minimp3 C library.\n"
+    },
+    {
+      "crate": "mp3lame-encoder",
+      "max_stable_version": "0.2.5",
+      "newest_version_published": "2026-08-20",
+      "total_downloads": 1106361,
+      "description": "High level bindings to mp3lame encoder"
+    },
+    {
+      "crate": "mp3lame-encode",
+      "error": "HTTP Error 404: Not Found"
+    },
+    {
+      "crate": "shine-mp3",
+      "error": "HTTP Error 404: Not Found"
+    },
+    {
+      "crate": "rustfft",
+      "max_stable_version": "6.4.1",
+      "newest_version_published": "2025-09-18",
+      "total_downloads": 30551399,
+      "description": "High-performance FFT library written in pure Rust."
+    },
+    {
+      "crate": "realfft",
+      "max_stable_version": "3.5.0",
+      "newest_version_published": "2025-06-12",
+      "total_downloads": 17706297,
+      "description": "Real-to-complex forward FFT and complex-to-real inverse FFT for Rust"
+    },
+    {
+      "crate": "rubato",
+      "max_stable_version": "5.0.1",
+      "newest_version_published": "2026-10-01",
+      "total_downloads": 12343003,
+      "description": "Asynchronous resampling library intended for audio data"
+    },
+    {
+      "crate": "dasp",
+      "max_stable_version": "0.11.0",
+      "newest_version_published": "2020-05-29",
+      "total_downloads": 5195528,
+      "description": "A crate providing the fundamentals for working with audio PCM DSP."
+    },
+    {
+      "crate": "fundsp",
+      "max_stable_version": "0.23.0",
+      "newest_version_published": "2026-01-07",
+      "total_downloads": 216735,
+      "description": "Audio processing and synthesis library."
+    },
+    {
+      "crate": "biquad",
+      "max_stable_version": "0.6.0",
+      "newest_version_published": "2026-03-22",
+      "total_downloads": 406685,
+      "description": "A library for digital second order IIR filters, also known as biquads."
+    },
+    {
+      "crate": "ringbuf",
+      "max_stable_version": "0.5.2",
+      "newest_version_published": "2026-09-13",
+      "total_downloads": 20069308,
+      "description": "Lock-free SPSC FIFO ring buffer with direct access to inner data"
+    },
+    {
+      "crate": "pitch-detection",
+      "max_stable_version": "0.3.0",
+      "newest_version_published": "2022-06-30",
+      "total_downloads": 71924,
+      "description": "A collection of algorithms to determine the pitch of a sound sample."
+    },
+    {
+      "crate": "pitchy",
+      "max_stable_version": "0.2.0",
+      "newest_version_published": "2025-05-30",
+      "total_downloads": 3429,
+      "description": "Minimalistic Rust library for working with frequencies (Hz), MIDI numbers, musical notes, "
+    },
+    {
+      "crate": "aubio-rs",
+      "max_stable_version": "0.2.0",
+      "newest_version_published": "2021-04-30",
+      "total_downloads": 22592,
+      "description": "Safe bindings for aubio library to label music and sounds."
+    },
+    {
+      "crate": "rustybuzz",
+      "max_stable_version": "0.20.1",
+      "newest_version_published": "2024-11-12",
+      "total_downloads": 32742050,
+      "description": "A complete harfbuzz shaping algorithm port to Rust."
+    },
+    {
+      "crate": "cosmic-text",
+      "max_stable_version": "0.19.0",
+      "newest_version_published": "2026-04-22",
+      "total_downloads": 9637427,
+      "description": "Pure Rust multi-line text handling"
+    },
+    {
+      "crate": "rfd",
+      "max_stable_version": "0.17.2",
+      "newest_version_published": "2026-01-12",
+      "total_downloads": 32967048,
+      "description": "Rusty File Dialog"
+    },
+    {
+      "crate": "crossbeam-channel",
+      "max_stable_version": "0.5.17",
+      "newest_version_published": "2026-09-05",
+      "total_downloads": 621042458,
+      "description": "Multi-producer multi-consumer channels for message passing"
+    }
+  ]
+}
