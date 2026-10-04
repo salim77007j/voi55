@@ -20,8 +20,10 @@ pub mod buffer;
 pub mod capture;
 pub mod devices;
 pub mod error;
+pub mod wav;
 
 pub use buffer::AudioBuffer;
 pub use capture::{CaptureInfo, CapturePlan, ConfigCandidate, PREFERRED_SAMPLE_RATE, Recorder};
 pub use devices::{DeviceInfo, list_input_devices};
 pub use error::{AudioError, Result};
+pub use wav::{WavBitDepth, export_wav, import_wav};
