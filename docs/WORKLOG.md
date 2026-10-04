@@ -164,3 +164,72 @@ round-trip unit tests. Commit after each sub-item.
   OLA is its groundwork.
 - NEXT: Phase 6 — VALIDATION_REPORT.md, real-hardware numbers, native-Arabic
   reviewer checklist, tag v1.0.0 — awaits the explicit "continue".
+
+## 2026-10-04 — Phase 6.1: chunk-driven streaming render (f2a25f8)
+
+- `mvl-core::stream`: each stage loop (PSOLA grains, formant frames, air
+  frames) moved into a chunk-driven driver; the offline functions are thin
+  wrappers over the same math. `CarryOla::with_start` (restart head) +
+  `x_base` input windows; `EnvStream::reset_to`. `StreamChain` drives
+  pitch→formant→air through a demand wave (progress = sum of stage heads,
+  so mid-pipeline rounds don't stall), front-trims hand-off buffers to the
+  consumer frontier (memory window-sized, file-length-independent).
+- GOTCHA: a stage advance that requested work but yields nothing means the
+  chain is exhausted (OLA tails never flush on their own) — the caller must
+  run `finish` once. GOTCHA 2: a restart seeds a fresh PSOLA read-pointer
+  phase — the epoch grid is identical but the output is not sample-exact vs
+  the full render (perceptually equivalent; disclosed).
+- Gates: chunked == offline render (exact f32) for 7 stage combos × chunk
+  sizes {1,7,479,4095,2²⁰}; bounded buffers; STFT restart convergence
+  (measured bound ≤ 2 windows + slack); neutral rejected; latency readout.
+
+## 2026-10-04 — Phase 6.2a: streaming preview player (e244fd5)
+
+- `mvl-audio::preview`: PreviewStream worker (10 ms chunks → bounded FIFO,
+  100 ms), Player gains a FIFO source (mono→N mapping in the callback,
+  transport identical for both sources). Slider change = restart at the
+  playhead + 10 ms crossfade splice onto the unplayed tail.
+- FIFO splice contract: continuity (read ≤ at ≤ write: tail capture +
+  rewind, gap-free) and hard jump (seek beyond production / backward:
+  cursor reset + consumer hold until the first push — stale ring content
+  unreachable). GOTCHA: consume only what `push` accepted — the blended
+  remainder parks in a worker-local pending buffer (dropping it loses
+  audio; re-serving it double-crossfades). GOTCHA: restart position may
+  equal the cursor → empty advance ≠ exhaustion; only "requested work and
+  got nothing" fires the tail flush. Completion signal for consumers is the
+  FIFO read cursor reaching the end (hard jumps discard regions — a
+  pulled-sample counter never terminates).
+- Disclosures (module docs): splice region = partial overlap history
+  (masked by the crossfade); pitch-active restart resets PSOLA phase
+  (perceptual, not sample-exact; exports use the offline render); FIFO is
+  mono session-rate (no RT resampler); cpal callback needs hardware.
+- Gates (42 audio tests): streamed == offline render bit-exact through the
+  worker; STFT restart converges exactly beyond the artifact window; pitch
+  restart moves the comb to the new target (ceps gate — window ≥ 8192
+  samples, the instrument's Welch FFT); FIFO wrap/underrun/hold; backpressure.
+
+## 2026-10-04 — Phase 6.2b: app wiring (f6f18e2)
+
+- Live lifecycle: started on first play (device probe via
+  `devices::default_output_rate()`, session rate == device rate, track
+  available, non-neutral params); slider moves restart at the playhead and
+  show the last measured restart latency (new EN/AR status string);
+  neutral params stop the live path (original plays); stop/rewind
+  hard-jump the stream cursor to 0; new sessions stop the old worker. The
+  debounced offline render still feeds the A/B view; exports unchanged
+  (offline). Headless/screenshot paths untouched (12 app tests green).
+
+## 2026-10-04 — Phase 6.3/6.4: validation close-out (d84d297 + this)
+
+- `docs/VALIDATION_REPORT.md`: 17-row verified-claims matrix (every brief
+  requirement → evidence artifact); real-hardware protocols (§3: round
+  trip, named sound-quality verdicts, soak, 192 kHz capture, live-latency
+  loopback, cold start, per-OS notes); native-Arabic reviewer checklist
+  (§4); performance table (§5); honest gaps ledger (§6, incl. the new
+  restart artifacts and the rate-match constraint). Final `v1.0.0` =
+  sign-off on those protocols.
+- README refreshed (status table, features, verified budgets, 112 tests).
+- Quality at HEAD: 112 tests green (56 core + 42 audio + 12 app + 2),
+  fmt + clippy `-D warnings` clean workspace-wide.
+- NEXT: tag `v1.0.0-rc.1` (fires the release workflow); then the hardware
+  protocols on real machines → final `v1.0.0`.
