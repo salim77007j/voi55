@@ -66,12 +66,12 @@ pub fn resample_interleaved(
             let window = 0.5 * (1.0 + (std::f64::consts::PI * d / half_width as f64).cos());
             let weight = sinc * window * 2.0 * cutoff;
             let frame = k as usize;
-            for ch in 0..channels {
-                scratch[ch] += f64::from(input[frame * channels + ch]) * weight;
+            for (ch, acc) in scratch.iter_mut().enumerate() {
+                *acc += f64::from(input[frame * channels + ch]) * weight;
             }
         }
-        for ch in 0..channels {
-            out.push(scratch[ch] as f32);
+        for acc in &scratch {
+            out.push(*acc as f32);
         }
     }
     out

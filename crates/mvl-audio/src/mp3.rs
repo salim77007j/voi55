@@ -155,7 +155,7 @@ fn append_decoded(
         GenericAudioBufferRef::S8(buf) => {
             push_interleaved(buf, out, |s| f32::from(s) / 128.0)?;
         }
-        other => {
+        _other => {
             return Err(AudioError::UnsupportedConfig(
                 "decoded sample format (24-bit integer family) is not convertible".into(),
             ));
@@ -253,7 +253,8 @@ pub fn export_mp3(path: impl AsRef<Path>, buffer: &AudioBuffer, bitrate_kbps: u3
             let frames = samples.len() / 2;
             let mut left = Vec::with_capacity(frames);
             let mut right = Vec::with_capacity(frames);
-            for frame in samples.chunks_exact(2) {
+            let (stereo, _) = samples.as_chunks::<2>();
+            for frame in stereo {
                 left.push(frame[0]);
                 right.push(frame[1]);
             }
