@@ -32,12 +32,15 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # LeakSanitizer runs at process exit by default on Linux — the test
-      # suite doubles as a leak check for the DSP and I/O crates.
+      # ASan applies to target artifacts only — proc-macros and build
+      # scripts compile for the host and cannot be instrumented
+      # ("building proc macro crate with sanitizers enabled is not
+      # supported"), so the sanitizer flags are scoped to the target triple
+      # and --target is passed explicitly.
       - name: Test under AddressSanitizer
         env:
-          RUSTFLAGS: -Zsanitizer=address
-        run: cargo test -p mvl-core -p mvl-audio
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -Zsanitizer=address
+        run: cargo test --target x86_64-unknown-linux-gnu -p mvl-core -p mvl-audio
 
   valgrind:
     name: Valgrind (headless app run)
@@ -48,8 +51,8 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Install ALSA headers + valgrind
-        run: sudo apt-get update && sudo apt-get install -y pkg-config libasound2-dev valgrind
+      - name: Install ALSA + fontconfig headers + valgrind
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libasound2-dev libfontconfig1-dev valgrind
 
       - uses: Swatinem/rust-cache@v2
 
