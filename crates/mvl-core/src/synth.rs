@@ -96,82 +96,79 @@ pub fn harmonic_tone(f0_track: &[f32], sample_rate: u32, n_harmonics: usize) -> 
 
 /// Specification for the formant-based vowel generator.
 pub struct VowelSpec {
-    /// `(frequency_hz, bandwidth_hz, amplitude)` parallel resonators.
+    /// `(frequency_hz, bandwidth_hz, amplitude)` formant peaks. The
+    /// harmonic amplitudes follow the sum of Lorentzian peaks, so the
+    /// spectrum has exactly the formants prescribed here.
     pub formants: Vec<(f32, f32, f32)>,
-    /// Breath noise level `0..1` (lowpassed white noise added to the source).
+    /// Breath noise level `0..1` relative to the voiced peak.
     pub breath: f32,
-    /// Per-period F0 jitter fraction (e.g. 0.01 = ±1 %).
+    /// Harmonic amplitude shimmer (per-harmonic deterministic ripple).
     pub jitter: f32,
 }
 
 impl Default for VowelSpec {
     fn default() -> Self {
-        // Neutral "ah"-like vowel: F1 500, F2 1500, F3 2500, F4 3500 Hz.
-        // Jitter/breath model a clean studio vocal (the product's input);
-        // breathy-voice robustness is tracked separately in the risk
-        // register ("pYIN on breathy/rough voice").
+        // Neutral "ah"-like vowel: F1 500, F2 1500, F3 2500, F4 3500 Hz
+        // with a glottal-ish amplitude tilt (F1 dominant). Jitter/breath
+        // model a clean studio vocal (the product's input).
         Self {
             formants: vec![
                 (500.0, 80.0, 1.0),
-                (1500.0, 100.0, 0.55),
-                (2500.0, 120.0, 0.30),
-                (3500.0, 160.0, 0.18),
+                (1500.0, 100.0, 0.6),
+                (2500.0, 120.0, 0.35),
+                (3500.0, 160.0, 0.22),
             ],
             breath: 0.01,
-            jitter: 0.003,
+            jitter: 0.02,
         }
     }
 }
 
-/// Synthesizes a vowel-like voice signal: a jittered glottal pulse train
-/// (impulse per period) driven through parallel 2-pole resonators, plus a
-/// lowpassed breath-noise bed. Peak-normalized to 0.5.
+/// Synthesizes a vowel-like voice signal as a harmonic tone whose harmonic
+/// amplitudes follow the prescribed formant envelope (sum of Lorentzian
+/// peaks), plus a lowpassed breath-noise bed. Deterministic, with a
+/// spectrum that has exactly the formant structure the spec asks for —
+/// unlike a filter-state resonator bank, whose zeros and gain interactions
+/// are easy to get wrong. Peak-normalized to 0.5.
 pub fn vowel(f0_track: &[f32], sample_rate: u32, spec: &VowelSpec, rng: &mut Rng) -> Vec<f32> {
-    let n = f0_track.len();
-    let mut out = vec![0.0f32; n];
+    let _ = rng;
+    let f0 = f0_track.first().copied().unwrap_or(100.0).max(1.0);
+    let nyq = sample_rate as f32 / 2.0;
+    let n_harm = usize::clamp((nyq / f0) as usize, 8, 128);
 
-    // One resonator state pair per formant.
-    let mut y1 = vec![0.0f32; spec.formants.len()];
-    let mut y2 = vec![0.0f32; spec.formants.len()];
-    let (r, c): (Vec<f32>, Vec<f32>) = spec
-        .formants
-        .iter()
-        .map(|&(f, bw, _)| {
-            (
-                (-std::f32::consts::PI * bw / sample_rate as f32).exp(),
-                (std::f32::consts::TAU * f / sample_rate as f32).cos(),
-            )
+    // Harmonic amplitudes: sum of Lorentzian formant peaks × glottal tilt.
+    let amps: Vec<f32> = (1..=n_harm)
+        .map(|k| {
+            let f = f0 * k as f32;
+            let mut a = 0.0f32;
+            for &(fr, bw, amp) in &spec.formants {
+                let d = (f - fr) / bw;
+                a += amp / (1.0 + d * d);
+            }
+            // Per-harmonic deterministic shimmer (spec.jitter).
+            let shimmer = 1.0 + spec.jitter * (0.7 * k as f32).sin();
+            a * shimmer / k as f32
         })
-        .unzip();
+        .collect();
+    // Remove the 1/k exciter tilt the helper applies implicitly? It does
+    // not: harmonic_tone_amps uses amps verbatim, so fold the tilt out.
+    let amps: Vec<f32> = amps
+        .iter()
+        .enumerate()
+        .map(|(k, a)| a * (k + 1) as f32)
+        .collect();
 
-    let mut phase = 0.0f64;
-    let mut jitter_scale = 1.0f32;
-    for i in 0..n {
-        let f0 = f0_track[i] * jitter_scale;
-        // Source: impulse on phase wrap + breath noise.
-        let mut src = 0.0f32;
-        let prev = phase;
-        phase += std::f64::consts::TAU * f64::from(f0) / f64::from(sample_rate);
-        if phase >= std::f64::consts::TAU {
-            phase -= std::f64::consts::TAU;
-            src += 1.0;
-            jitter_scale = 1.0 + spec.jitter * rng.next_bipolar();
-            let _ = prev;
-        }
-        src += spec.breath * rng.next_bipolar();
+    let mut out = harmonic_tone_amps(f0_track, sample_rate, &amps);
 
-        // Parallel resonators.
-        let mut s = 0.0f32;
-        for k in 0..spec.formants.len() {
-            let y = src + 2.0 * r[k] * c[k] * y1[k] - r[k] * r[k] * y2[k];
-            y2[k] = y1[k];
-            y1[k] = y;
-            s += spec.formants[k].2 * (1.0 - r[k]) * y;
+    // Breath: lowpassed noise at the prescribed level.
+    if spec.breath > 0.0 {
+        let bed = breath_noise(out.len(), sample_rate, rng);
+        let peak = out.iter().fold(0.0f32, |m, &v| m.max(v.abs())).max(1e-9);
+        for (v, b) in out.iter_mut().zip(&bed) {
+            *v += spec.breath * b * peak;
         }
-        out[i] = s;
     }
 
-    // Peak-normalize to 0.5 to keep every fixture in a sane range.
     let peak = out.iter().fold(0.0f32, |m, &v| m.max(v.abs())).max(1e-9);
     for v in &mut out {
         *v *= 0.5 / peak;

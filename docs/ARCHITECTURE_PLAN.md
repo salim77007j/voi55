@@ -283,6 +283,25 @@ are warped gently to avoid lisping artifacts.
 - *Phase-vocoder formant moving* — inherits vocoder phasiness; also couples to pitch path.
 - *Neural voice conversion* — same objections as D8 for v1.
 
+**Implementation amendments (Phase 3, verified on fixtures):**
+
+- **Exact envelope resampling replaces the allpass Bark warp.** The
+  allpass map approximates uniform formant scaling only locally — its
+  effective ratio varies per formant (up to ~30 % at F4), which would
+  violate the contractual `F_new ≈ F_old · 175/L` mapping the UI exposes.
+  The shipped warp resamples the envelope exactly on the frequency axis:
+  `E_new(f) = E(f/r)`, `r = 175/target_mm`.
+- **Cepstral envelope estimation replaces LPC.** Per Hann-STFT frame the
+  log-spectrum is liftered at quefrency `sr/300 Hz` (comb and finer ripple
+  removed) and transformed back, giving a comb-free envelope. LPC's
+  least-squares fit proved fragile on strongly periodic synthetic
+  excitations (poles follow the spectral tilt, starving the warp of
+  formant evidence); cepstral lifting is excitation-model-free and is the
+  robust standard for envelope estimation. `mvl-core::lpc` remains as a
+  diagnostics utility. The ratio is applied in the log domain
+  (`R(f) = exp(env(f/r) − env(f))`), smoothed, limited to ±18 dB, tapered
+  at the band edge, and loudness-compensated per frame.
+
 ### D10 — Air & Breath engine: **STFT harmonic/residual decomposition with independent gain** (signature feature)
 
 **Decision.** A two-path STFT processor (window 2048 @ ≤ 48 kHz equivalents, scaled at

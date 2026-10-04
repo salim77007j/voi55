@@ -174,7 +174,7 @@ fn refine_epoch(x: &[f32], predicted: f64, period: f64) -> usize {
 /// Sample-rate voicing envelope: smoothed p_v per frame, linearly
 /// interpolated; frames below [`BYPASS_GATE`] snap to exact zero so
 /// clearly unvoiced material bypasses bit-exactly.
-fn voicing_envelope(len: usize, sample_rate: u32, track: &PyinResult) -> Vec<f32> {
+pub(crate) fn voicing_envelope(len: usize, sample_rate: u32, track: &PyinResult) -> Vec<f32> {
     if track.is_empty() {
         return vec![0.0; len];
     }

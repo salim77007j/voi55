@@ -5,8 +5,9 @@
 //!
 //! - **Pitch** — pYIN tracking + TD-PSOLA shifting (±12 st, 1-cent steps,
 //!   duration- and formant-preserving).
-//! - **Formant** — LPC source–filter decomposition with allpass Bark-scale
-//!   envelope warping, controlled in millimetres of vocal-tract length.
+//! - **Formant** — LPC source–filter decomposition with exact frequency-
+//!   axis envelope resampling (D9 addendum), controlled in millimetres of
+//!   vocal-tract length.
 //! - **Air / Breath** — STFT harmonic/residual decomposition with a 0.1 dB
 //!   gain on the residual path.
 //!
@@ -22,7 +23,9 @@
 
 pub mod engine;
 pub mod error;
+pub mod formant;
 pub mod lpc;
+pub mod measure;
 pub mod psola;
 pub mod pyin;
 pub mod synth;
