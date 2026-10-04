@@ -57,6 +57,9 @@ pub struct StrTable {
     pub status_render_failed: &'static str,
     pub status_no_playback: &'static str,
     pub status_playback_failed: &'static str,
+    /// Live streaming preview engaged (Phase 6). `{us}` is the last
+    /// measured restart latency in µs (empty on the first restart).
+    pub status_live: &'static str,
     pub status_no_record: &'static str,
     pub status_recording: &'static str,
     pub status_recorded: &'static str,
@@ -95,6 +98,7 @@ pub const EN: StrTable = StrTable {
     status_rendered: "preview rendered in {ms} ms ({stages})",
     status_rendering: "rendering…",
     status_render_failed: "render failed: {error}",
+    status_live: "live preview · restart {us}",
     status_no_playback: "playback unavailable ({error}) — export still works",
     status_playback_failed: "playback failed: {error}",
     status_no_record: "recording unavailable ({error})",
@@ -130,6 +134,7 @@ pub const AR: StrTable = StrTable {
     status_rendered: "المعاينة جاهزة خلال {ms} ms ({stages})",
     status_rendering: "جارٍ المعالجة…",
     status_render_failed: "فشلت المعالجة: {error}",
+    status_live: "معاينة حيّة · إعادة التشغيل {us}",
     status_no_playback: "التشغيل غير متاح ({error}) — التصدير يعمل",
     status_playback_failed: "فشل التشغيل: {error}",
     status_no_record: "التسجيل غير متاح ({error})",

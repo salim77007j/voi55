@@ -38,6 +38,30 @@ pub fn default_input_device() -> Result<cpal::Device> {
     host.default_input_device().ok_or(AudioError::NoDevice)
 }
 
+/// The sample rate the default *output* device would grant an `f32`
+/// mono/stereo stream (the same selection the [`crate::Player`] makes).
+/// Used by the UI to decide whether the streaming preview can run without
+/// a resampler.
+///
+/// Returns `None` without an output device (headless machines) — the
+/// caller then keeps the offline preview path.
+pub fn default_output_rate() -> Option<u32> {
+    let host = cpal::default_host();
+    let device = host.default_output_device()?;
+    let mut best: Option<(cpal::SupportedStreamConfig, u32)> = None;
+    for range in device.supported_output_configs().ok()? {
+        if range.sample_format() != SampleFormat::F32 || range.channels() > 2 {
+            continue;
+        }
+        let rate = 48_000u32.clamp(range.min_sample_rate(), range.max_sample_rate());
+        let cost = rate.abs_diff(48_000);
+        if best.as_ref().is_none_or(|(_, best_cost)| cost < *best_cost) {
+            best = Some((range.with_sample_rate(rate), cost));
+        }
+    }
+    best.map(|(config, _)| config.sample_rate())
+}
+
 /// Lists every input device visible to the platform's default host.
 ///
 /// # Errors

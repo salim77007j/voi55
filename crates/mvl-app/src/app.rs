@@ -81,6 +81,12 @@ pub struct App {
     export_bitrate: Cell<u32>,
     /// True when parameters changed since the last render.
     dirty: Cell<bool>,
+    /// Live streaming preview (Phase 6): started on the first play when a
+    /// device is present and the session rate matches the device rate;
+    /// slider changes restart it at the playhead. `None` on deviceless,
+    /// rate-mismatched or neutral-parameter paths — the debounced offline
+    /// render stays the honest fallback.
+    live: RefCell<Option<mvl_audio::PreviewStream>>,
     /// UI language (4.5): drives strings, embedded font and layout
     /// direction; defaults to English (D1).
     lang: Cell<Lang>,
@@ -114,6 +120,7 @@ impl App {
             export_format: Cell::new(0),
             export_bitrate: Cell::new(mvl_audio::DEFAULT_MP3_BITRATE),
             dirty: Cell::new(false),
+            live: RefCell::new(None),
             lang: Cell::new(Lang::En),
         });
         *app.self_weak.borrow_mut() = Rc::downgrade(&app);
@@ -216,18 +223,20 @@ impl App {
         });
         let weak = Rc::downgrade(&app);
         app.window.on_transport_stop(move || {
-            if let Some(app) = weak.upgrade()
-                && let Some(p) = app.player.borrow_mut().as_ref()
-            {
-                let _ = p.stop();
+            if let Some(app) = weak.upgrade() {
+                app.live_rewind();
+                if let Some(p) = app.player.borrow_mut().as_ref() {
+                    let _ = p.stop();
+                }
             }
         });
         let weak = Rc::downgrade(&app);
         app.window.on_transport_rewind(move || {
-            if let Some(app) = weak.upgrade()
-                && let Some(p) = app.player.borrow_mut().as_ref()
-            {
-                let _ = p.stop();
+            if let Some(app) = weak.upgrade() {
+                app.live_rewind();
+                if let Some(p) = app.player.borrow_mut().as_ref() {
+                    let _ = p.stop();
+                }
             }
         });
         let weak = Rc::downgrade(&app);
@@ -400,6 +409,7 @@ impl App {
         self.params.set(p);
         self.sync_param_ui();
         self.schedule_render();
+        self.live_update();
     }
 
     fn apply_air(&self, v: f64) {
@@ -409,6 +419,7 @@ impl App {
         self.params.set(p);
         self.sync_param_ui();
         self.schedule_render();
+        self.live_update();
     }
 
     fn apply_formant(&self, v: f64) {
@@ -418,6 +429,7 @@ impl App {
         self.params.set(p);
         self.sync_param_ui();
         self.schedule_render();
+        self.live_update();
     }
 
     /// Sets the three engine parameters, echoes the UI and renders
@@ -436,6 +448,8 @@ impl App {
 
     /// Loads a project buffer (analyzing the pYIN track) and shows it.
     pub fn load_audio(&self, buffer: AudioBuffer, name: &str) {
+        // The old live stream renders the *old* session — stop it first.
+        self.live_stop();
         let session = Session::load(buffer, name.to_string(), true);
         self.session.replace(Some(session));
 
@@ -750,6 +764,103 @@ impl App {
         session.as_ref().map(|s| Arc::new(s.buffer.clone()))
     }
 
+    // ── Live streaming preview (Phase 6) ─────────────────────────────
+
+    /// Starts the live preview when it can run: device present, session
+    /// rate == device rate, pYIN track available, non-neutral parameters.
+    /// Any miss keeps the offline preview path (honest fallback — a missing
+    /// device is a normal situation, not an error to surface here).
+    fn live_start(&self) -> bool {
+        if self.live.borrow().is_some() {
+            return true;
+        }
+        let session_borrow = self.session.borrow();
+        let Some(session) = session_borrow.as_ref() else {
+            return false;
+        };
+        let Some(track) = session.track.as_ref() else {
+            return false;
+        };
+        if self.params.get().is_neutral() {
+            return false;
+        }
+        let rate = session.buffer.sample_rate();
+        let Some(device_rate) = mvl_audio::devices::default_output_rate() else {
+            return false;
+        };
+        if device_rate != rate {
+            return false;
+        }
+        let capacity = ((rate / 10) as usize).max(960); // 100 ms FIFO
+        match mvl_audio::PreviewStream::start(
+            Arc::clone(&session.mono),
+            rate,
+            Arc::clone(track),
+            &self.params.get(),
+            self.playhead_sample(),
+            capacity,
+        ) {
+            Ok(stream) => {
+                *self.live.borrow_mut() = Some(stream);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// Slider change while live: restart the chain at the playhead (the
+    /// change is audible within ~one FIFO depth, crossfaded). Neutral
+    /// parameters stop the live path — the original buffer plays.
+    fn live_update(&self) {
+        if self.params.get().is_neutral() {
+            self.live_stop();
+            return;
+        }
+        let active = self.live.borrow().is_some() || self.live_start();
+        if !active {
+            return;
+        }
+        if let Some(live) = self.live.borrow().as_ref() {
+            live.restart(&self.params.get(), self.playhead_sample());
+            // The latency readout is the *last* measured restart (the
+            // current one is measured asynchronously in the worker).
+            let us = live
+                .stats()
+                .last_restart_us
+                .map(|v| self.num(format!("{v}")))
+                .unwrap_or_else(|| self.num("—".into()));
+            self.status(self.t().status_live, &[("us", us)]);
+        }
+    }
+
+    /// Transport stop/rewind with a live source: rewind the stream cursor
+    /// to the beginning (hard jump; the worker re-renders from 0).
+    fn live_rewind(&self) {
+        if let Some(live) = self.live.borrow().as_ref() {
+            live.restart(&self.params.get(), 0);
+        }
+    }
+
+    /// Stops and drops the live preview (new session, neutral parameters).
+    fn live_stop(&self) {
+        if let Some(live) = self.live.borrow_mut().take() {
+            live.stop();
+        }
+    }
+
+    /// Current playback position in session samples (the FIFO read cursor
+    /// via the player; 0 when stopped or without a player).
+    fn playhead_sample(&self) -> usize {
+        let len = self.session.borrow().as_ref().map_or(0, |s| s.mono.len());
+        let guard = self.player.borrow();
+        let Some(player) = guard.as_ref() else {
+            return 0;
+        };
+        let (rate, _) = player.output_format();
+        let s = (player.position_secs() * f64::from(rate)) as usize;
+        s.min(len)
+    }
+
     fn play_pause(&self) {
         // Lazily connect; honest failure without a device.
         if self.player.borrow().is_none()
@@ -782,18 +893,38 @@ impl App {
                 .map(|p| p.resume())
                 .unwrap_or(Ok(())),
             mvl_audio::Transport::Stopped => {
-                // Rendering (if due) happens synchronously so playback
-                // always matches the sliders.
-                if self.dirty.get() {
+                // Offline path: render synchronously so playback always
+                // matches the sliders. The live path (Phase 6) re-renders
+                // continuously — no stall there.
+                if self.dirty.get() && !self.live_start() {
                     self.render_now();
                 }
-                match self.playback_source() {
-                    Some(buffer) => self
-                        .player
-                        .borrow_mut()
-                        .as_mut()
-                        .map_or(Ok(()), |p| p.play(buffer)),
-                    None => Ok(()),
+                if self.live.borrow().is_some() {
+                    // Stream from the live preview FIFO (mono, session
+                    // rate — the Player validates the rate match).
+                    let fifo = self.live.borrow().as_ref().map(|l| l.fifo().clone());
+                    let rate = self
+                        .session
+                        .borrow()
+                        .as_ref()
+                        .map(|s| s.buffer.sample_rate());
+                    match (fifo, rate) {
+                        (Some(fifo), Some(rate)) => self
+                            .player
+                            .borrow_mut()
+                            .as_mut()
+                            .map_or(Ok(()), |p| p.play_stream(fifo, rate)),
+                        _ => Ok(()),
+                    }
+                } else {
+                    match self.playback_source() {
+                        Some(buffer) => self
+                            .player
+                            .borrow_mut()
+                            .as_mut()
+                            .map_or(Ok(()), |p| p.play(buffer)),
+                        None => Ok(()),
+                    }
                 }
             }
         };
