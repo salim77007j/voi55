@@ -15,7 +15,7 @@ like Melodyne. Native on **Windows**, **macOS**, and **Linux**.
 | Phase | Scope | Status |
 |---|---|---|
 | 1 | Research + architecture plan | **Complete** (this commit) |
-| 2 | Project scaffold + audio I/O (capture / import / export / playback) | Pending |
+| 2 | Project scaffold + audio I/O (capture / import / export / playback) | **Complete** |
 | 3 | DSP engine: pYIN + PSOLA pitch, LPC formant warp, air/breath control | Pending |
 | 4 | Professional UI (English LTR + Arabic RTL), waveform, wired controls | Pending |
 | 5 | CI (Windows / macOS / Linux), integration testing, artifacts | Pending |
@@ -33,13 +33,16 @@ evidence): see **[docs/ARCHITECTURE_PLAN.md](docs/ARCHITECTURE_PLAN.md)**.
   LPC source–filter formant warping in millimetres · STFT harmonic/residual air engine (0.1 dB)
 - **Design language**: "Studio Graphite" — dark, hardware-referential, WCAG AA, Inter + IBM Plex Sans Arabic
 
-## Building
+## Building (Linux dev note)
 
-Phase 1 is documentation-only. Build instructions land with the Phase 2 scaffold.
+Standard Rust toolchain (1.88+). On Linux, `cpal` needs ALSA development
+headers (`libasound2-dev`) at build time.
 
 ```bash
-cargo build --release        # from Phase 2 onward
-cargo test                   # engine + I/O test suite
+cargo build --release
+cargo test                            # 36 tests: I/O round-trips, negotiation, DSP contract
+cargo run -p mvl-app                  # environment report
+cargo run -p mvl-app -- --selftest-audio   # real end-to-end playback exercise
 ```
 
 ## License
