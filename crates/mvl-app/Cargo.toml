@@ -20,6 +20,7 @@ mvl-core = { path = "../mvl-core" }
 mvl-audio = { path = "../mvl-audio" }
 slint = { workspace = true }
 png = { workspace = true }
+rfd = { workspace = true }
 
 [features]
 # Headless screenshot mode for evidence generation and CI smoke tests.

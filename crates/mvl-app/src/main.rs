@@ -63,7 +63,7 @@ fn load_flagged(
         }
         (Some(other), _) => Err(format!("unknown --demo kind: {other} (only 'synth')")),
         (_, Some(path)) => {
-            let buffer = load_any(path)?;
+            let buffer = mvl_app::dialogs::load_any(path)?;
             let name = path
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
@@ -72,22 +72,6 @@ fn load_flagged(
             Ok(())
         }
         (None, None) => Ok(()),
-    }
-}
-
-/// Import dispatch by extension (used by CLI and, from 4.4 on, dialogs).
-pub fn load_any(path: &std::path::Path) -> Result<AudioBuffer, String> {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(str::to_ascii_lowercase)
-        .unwrap_or_default();
-    match ext.as_str() {
-        "wav" | "wave" => mvl_audio::import_wav(path).map_err(|e| e.to_string()),
-        "mp3" => mvl_audio::import_mp3(path).map_err(|e| e.to_string()),
-        other => Err(format!(
-            "unsupported file type {other:?} — open .wav or .mp3"
-        )),
     }
 }
 

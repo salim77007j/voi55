@@ -83,6 +83,8 @@ fn headless_ui_renders_and_drives_the_engine() {
     };
     let mut params_out = None;
     headless::render_to_png(&slider_args, |app| {
+        let buffer = mvl_app::session::demo_vocal().map_err(|e| e.to_string())?;
+        app.load_audio(buffer, "demo-vocal (synth)");
         app.set_params_and_render(4.0, 5.5, 140.0);
         params_out = Some(app.params());
         Ok(())
@@ -95,21 +97,22 @@ fn headless_ui_renders_and_drives_the_engine() {
     assert!((p.air_db() - 5.5).abs() < 1e-9);
     assert!((p.formant_mm() - 140.0).abs() < 1e-9);
 
-    // Slider row (y ≈ 700–760): the pitch groove fill uses accent-pitch.
+    // Slider row: the pitch groove fill/thumb uses accent-pitch. Scan the
+    // whole band around the parameter row (layout-dependent y).
     let buf = decode(&slider_args.out);
     let px = |x: usize, y: usize| -> [u8; 3] {
         let i = (y * 1280 + x) * 4;
         [buf[i], buf[i + 1], buf[i + 2]]
     };
     let mut accent_hits = 0;
-    for x in 30..200 {
-        for y in 700..760 {
+    for x in 0..500 {
+        for y in 590..700 {
             if px(x, y) == ACCENT_PITCH {
                 accent_hits += 1;
             }
         }
     }
-    assert!(accent_hits > 5, "pitch slider fill must be visible");
+    assert!(accent_hits > 20, "pitch slider fill must be visible");
     // Status bar carries the render line (text over bg-elevated, scan the
     // glyph band).
     let mut status_text = 0;
@@ -124,6 +127,50 @@ fn headless_ui_renders_and_drives_the_engine() {
         status_text > 50,
         "status line must show the render info ({status_text})"
     );
+
+    // ── Step 3: export round-trip through the dialog override ────────
+    let export_path = dir.join("export-roundtrip.wav");
+    let export_args = headless::ScreenshotArgs {
+        out: dir.join("export.png"),
+        width: 1280,
+        height: 800,
+        demo: Some("synth".into()),
+        open: None,
+        playhead: None,
+        window_secs: None,
+        pitch: Some(2.0),
+        air: Some(0.0),
+        formant: Some(160.0),
+        preview: false,
+    };
+    // SAFETY: the only env readers in this binary run inside the
+    // render_to_png closures below, all on this thread.
+    unsafe { std::env::set_var("MVL_SAVE_FILE", export_path.display().to_string()) };
+    let mut export_status = None;
+    let mut export_frames = None;
+    headless::render_to_png(&export_args, |app| {
+        let buffer = mvl_app::session::demo_vocal().map_err(|e| e.to_string())?;
+        app.load_audio(buffer, "demo-vocal (synth)");
+        app.set_params_and_render(2.0, 0.0, 160.0);
+        app.export_confirm();
+        export_status = Some(app.status_line());
+        export_frames = Some(app.frames());
+        Ok(())
+    })
+    .expect("export render");
+    eprintln!("export status: {:?}", export_status);
+    unsafe { std::env::remove_var("MVL_SAVE_FILE") };
+
+    let frames = export_frames.expect("session frames");
+    assert!(export_path.exists(), "export must have written the file");
+    let reimported = mvl_audio::import_wav(&export_path).expect("reimport");
+    assert_eq!(
+        reimported.frames(),
+        frames,
+        "round-trip must preserve frames"
+    );
+    assert_eq!(reimported.sample_rate(), 48_000);
+    let _ = std::fs::remove_file(&export_path);
 }
 
 /// Verify the pixel-format round-trip of the un-premultiply helper used by

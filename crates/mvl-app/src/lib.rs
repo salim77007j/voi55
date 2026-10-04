@@ -10,6 +10,7 @@
 //! The session/audio state machine joins in sub-items 4.2+.
 
 pub mod app;
+pub mod dialogs;
 pub mod headless;
 pub mod session;
 pub mod waveform;

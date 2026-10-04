@@ -29,6 +29,9 @@ slint = { version = "1.18", features = ["renderer-software"] }
 slint-build = "1.18"
 # PNG encoding for the headless screenshot mode (evidence pipeline, D14)
 png = "0.18"
+# Native file dialogs (xdg-portal on Linux: no C toolkit dep; native APIs
+# on Windows/macOS). See D15 mvl-app responsibilities.
+rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
 
 [profile.release]
 opt-level = 3

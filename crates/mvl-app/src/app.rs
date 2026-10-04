@@ -17,6 +17,7 @@
 //! view.
 
 use crate::AppWindow;
+use crate::dialogs;
 use crate::session::Session;
 use crate::waveform::{self, STUDIO_COLORS, View, WaveformColors, WaveformPyramid};
 use mvl_audio::AudioBuffer;
@@ -34,6 +35,9 @@ use std::time::Instant;
 /// One completed preview render (A/B view source). `Send` by construction
 /// (plain data), so a background thread can produce it.
 struct PreviewRender {
+    /// The full rendered buffer (playback + export source).
+    #[allow(dead_code)]
+    buffer: AudioBuffer,
     pyramid: WaveformPyramid,
     /// Rendered mono (deep-zoom display source).
     mono: Arc<Vec<f32>>,
@@ -54,6 +58,7 @@ pub struct App {
     session: RefCell<Option<Session>>,
     params: Cell<EngineParams>,
     render_timer: RefCell<slint::Timer>,
+    poll_timer: RefCell<slint::Timer>,
     rendering: Arc<AtomicBool>,
     /// Parameters captured while a render was in flight (latest wins).
     pending: Arc<Mutex<Option<EngineParams>>>,
@@ -63,6 +68,16 @@ pub struct App {
     base_status: RefCell<String>,
     /// Weak self handle for timers (UI thread only).
     self_weak: RefCell<Weak<App>>,
+    /// Output transport (connected lazily — a machine may have no device).
+    player: RefCell<Option<mvl_audio::Player>>,
+    /// Running capture, if armed.
+    recorder: RefCell<Option<mvl_audio::Recorder>>,
+    record_started: RefCell<Option<Instant>>,
+    /// Export panel state: 0=f32 WAV, 1=24-bit, 2=16-bit, 3=MP3.
+    export_format: Cell<u8>,
+    export_bitrate: Cell<u32>,
+    /// True when parameters changed since the last render.
+    dirty: Cell<bool>,
 }
 
 impl App {
@@ -95,6 +110,7 @@ impl App {
             session: RefCell::new(None),
             params: Cell::new(EngineParams::default()),
             render_timer: RefCell::new(slint::Timer::default()),
+            poll_timer: RefCell::new(slint::Timer::default()),
             rendering: Arc::new(AtomicBool::new(false)),
             pending: Arc::new(Mutex::new(None)),
             render_rx: RefCell::new(None),
@@ -102,6 +118,12 @@ impl App {
             show_preview: Cell::new(false),
             base_status: RefCell::new(String::new()),
             self_weak: RefCell::new(Weak::new()),
+            player: RefCell::new(None),
+            recorder: RefCell::new(None),
+            record_started: RefCell::new(None),
+            export_format: Cell::new(0),
+            export_bitrate: Cell::new(mvl_audio::DEFAULT_MP3_BITRATE),
+            dirty: Cell::new(false),
         });
         *app.self_weak.borrow_mut() = Rc::downgrade(&app);
 
@@ -158,6 +180,80 @@ impl App {
             }
         });
 
+        // Import / export / transport callbacks (4.4, No-Fake-UI).
+        let weak = Rc::downgrade(&app);
+        app.window.on_import_clicked(move || {
+            if let Some(app) = weak.upgrade() {
+                app.import_clicked();
+            }
+        });
+        let weak = Rc::downgrade(&app);
+        app.window.on_export_clicked(move || {
+            if let Some(app) = weak.upgrade() {
+                let open = !app.window.get_export_open();
+                app.window.set_export_open(open);
+            }
+        });
+        let weak = Rc::downgrade(&app);
+        app.window.on_export_format_changed(move |i| {
+            if let Some(app) = weak.upgrade() {
+                app.export_format.set(i.clamp(0, 3) as u8);
+                app.window.set_export_format(i.clamp(0, 3));
+            }
+        });
+        let weak = Rc::downgrade(&app);
+        app.window.on_export_bitrate_changed(move |b| {
+            if let Some(app) = weak.upgrade() {
+                app.export_bitrate.set(b as u32);
+                app.window.set_export_bitrate(b);
+            }
+        });
+        let weak = Rc::downgrade(&app);
+        app.window.on_export_confirm(move || {
+            if let Some(app) = weak.upgrade() {
+                app.export_confirm();
+            }
+        });
+        let weak = Rc::downgrade(&app);
+        app.window.on_play_pause(move || {
+            if let Some(app) = weak.upgrade() {
+                app.play_pause();
+            }
+        });
+        let weak = Rc::downgrade(&app);
+        app.window.on_transport_stop(move || {
+            if let Some(app) = weak.upgrade()
+                && let Some(p) = app.player.borrow_mut().as_ref()
+            {
+                let _ = p.stop();
+            }
+        });
+        let weak = Rc::downgrade(&app);
+        app.window.on_transport_rewind(move || {
+            if let Some(app) = weak.upgrade()
+                && let Some(p) = app.player.borrow_mut().as_ref()
+            {
+                let _ = p.stop();
+            }
+        });
+        let weak = Rc::downgrade(&app);
+        app.window.on_record_toggle(move || {
+            if let Some(app) = weak.upgrade() {
+                app.record_toggle();
+            }
+        });
+
+        // UI poller: transport state, playhead and time readout.
+        let weak = app.self_weak.borrow().clone();
+        app.poll_timer.borrow_mut().start(
+            slint::TimerMode::Repeated,
+            std::time::Duration::from_millis(40),
+            move || {
+                let Some(app) = weak.upgrade() else { return };
+                app.poll_transport();
+            },
+        );
+
         Ok(app)
     }
 
@@ -176,9 +272,23 @@ impl App {
         self.params.get()
     }
 
+    /// Project frame count (tests/evidence).
+    pub fn frames(&self) -> usize {
+        self.session
+            .borrow()
+            .as_ref()
+            .map_or(0, |s| s.buffer.frames())
+    }
+
+    /// Current status line (tests/evidence).
+    pub fn status_line(&self) -> String {
+        self.window.get_status_core().to_string()
+    }
+
     // ── Parameter application ────────────────────────────────────────
 
     fn apply_pitch(&self, v: f64) {
+        self.dirty.set(true);
         let mut p = self.params.get();
         p.set_pitch_semitones(v);
         self.params.set(p);
@@ -187,6 +297,7 @@ impl App {
     }
 
     fn apply_air(&self, v: f64) {
+        self.dirty.set(true);
         let mut p = self.params.get();
         p.set_air_db(v);
         self.params.set(p);
@@ -195,6 +306,7 @@ impl App {
     }
 
     fn apply_formant(&self, v: f64) {
+        self.dirty.set(true);
         let mut p = self.params.get();
         p.set_formant_mm(v);
         self.params.set(p);
@@ -270,18 +382,15 @@ impl App {
                 session.track.as_deref(),
             );
             let render_ms = t0.elapsed().as_secs_f64() * 1000.0;
-            rendered.ok().map(|buffer| {
-                (
-                    Arc::new(mvl_audio::engine::downmix_mono(&buffer)),
-                    buffer.sample_rate(),
-                    render_ms,
-                )
-            })
+            rendered.ok().map(|buffer| (buffer, render_ms))
         };
         match outcome {
-            Some((mono, sample_rate, render_ms)) => {
+            Some((buffer, render_ms)) => {
+                let sample_rate = buffer.sample_rate();
+                let mono = Arc::new(mvl_audio::engine::downmix_mono(&buffer));
                 let pyramid = WaveformPyramid::build(&mono, sample_rate);
                 *self.preview.borrow_mut() = Some(PreviewRender {
+                    buffer,
                     pyramid,
                     mono,
                     render_ms,
@@ -295,6 +404,7 @@ impl App {
             }
             None => self.compose_status(Some("render failed")),
         }
+        self.dirty.set(false);
         self.refresh();
     }
 
@@ -353,8 +463,10 @@ impl App {
             let _ = tx.send(match rendered {
                 Ok(buffer) => {
                     let m = Arc::new(mvl_audio::engine::downmix_mono(&buffer));
+                    let pyramid = WaveformPyramid::build(&m, buffer.sample_rate());
                     RenderDone::Ok(Box::new(PreviewRender {
-                        pyramid: WaveformPyramid::build(&m, buffer.sample_rate()),
+                        buffer,
+                        pyramid,
                         mono: m,
                         render_ms,
                         params,
@@ -414,6 +526,237 @@ impl App {
                 }
             },
         );
+    }
+
+    // ── Import / export / transport (4.4) ────────────────────────────
+
+    fn import_clicked(&self) {
+        match dialogs::pick_audio_file() {
+            Ok(Some(path)) => match dialogs::load_any(&path) {
+                Ok(buffer) => {
+                    let name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| path.display().to_string());
+                    self.load_audio(buffer, &name);
+                }
+                Err(e) => self.compose_status(Some(&format!("import failed: {e}"))),
+            },
+            Ok(None) => {}
+            Err(e) => self.compose_status(Some(&format!("import dialog failed: {e}"))),
+        }
+    }
+
+    /// Renders the current parameter state and writes it to the chosen
+    /// path (non-destructive: the project buffer is never touched).
+    /// Exports the current render (public for the evidence test path).
+    pub fn export_confirm(&self) {
+        let mp3 = self.export_format.get() == 3;
+        let default_name = {
+            let session = self.session.borrow();
+            let name = session
+                .as_ref()
+                .map_or("project", |s| s.name.as_str())
+                .replace([' ', '/'], "-");
+            format!("{name}-rendered.{}", if mp3 { "mp3" } else { "wav" })
+        };
+        let path = match dialogs::pick_save_path(&default_name, mp3) {
+            Ok(Some(p)) => p,
+            Ok(None) => return,
+            Err(e) => {
+                self.compose_status(Some(&format!("export dialog failed: {e}")));
+                self.window.set_export_open(false);
+                return;
+            }
+        };
+        self.window.set_export_open(false);
+
+        // Always render fresh: export must reflect the current sliders.
+        let rendered = {
+            let session_borrow = self.session.borrow();
+            let Some(session) = session_borrow.as_ref() else {
+                return;
+            };
+            mvl_audio::engine::render_mono_to_buffer(
+                &session.mono,
+                session.buffer.sample_rate(),
+                session.buffer.channels(),
+                &self.params.get(),
+                session.track.as_deref(),
+            )
+        };
+        let rendered = match rendered {
+            Ok(b) => b,
+            Err(e) => {
+                self.compose_status(Some(&format!("render failed: {e}")));
+                return;
+            }
+        };
+        let t0 = Instant::now();
+        let written = if mp3 {
+            mvl_audio::export_mp3(&path, &rendered, self.export_bitrate.get())
+        } else {
+            let depth = match self.export_format.get() {
+                1 => mvl_audio::WavBitDepth::Int24,
+                2 => mvl_audio::WavBitDepth::Int16,
+                _ => mvl_audio::WavBitDepth::Float32,
+            };
+            mvl_audio::export_wav(&path, &rendered, depth)
+        };
+        match written {
+            Ok(()) => self.compose_status(Some(&format!(
+                "exported {} ({:.0} ms)",
+                path.display(),
+                t0.elapsed().as_secs_f64() * 1000.0
+            ))),
+            Err(e) => self.compose_status(Some(&format!("export failed: {e}"))),
+        }
+    }
+
+    /// The buffer playback should use: the preview render when one is
+    /// current, the original project buffer otherwise.
+    fn playback_source(&self) -> Option<Arc<AudioBuffer>> {
+        if !self.dirty.get()
+            && let Some(pr) = self.preview.borrow().as_ref()
+        {
+            return Some(Arc::new(pr.buffer.clone()));
+        }
+        let session = self.session.borrow();
+        session.as_ref().map(|s| Arc::new(s.buffer.clone()))
+    }
+
+    fn play_pause(&self) {
+        // Lazily connect; honest failure without a device.
+        if self.player.borrow().is_none()
+            && let Err(e) = mvl_audio::Player::connect().map(|p| {
+                *self.player.borrow_mut() = Some(p);
+            })
+        {
+            self.compose_status(Some(&format!(
+                "playback unavailable ({e}) — export still works"
+            )));
+            return;
+        }
+        let transport = self
+            .player
+            .borrow()
+            .as_ref()
+            .map_or(mvl_audio::Transport::Stopped, |p| p.transport());
+        let result = match transport {
+            mvl_audio::Transport::Playing => self
+                .player
+                .borrow()
+                .as_ref()
+                .map(|p| p.pause())
+                .unwrap_or(Ok(())),
+            mvl_audio::Transport::Paused => self
+                .player
+                .borrow()
+                .as_ref()
+                .map(|p| p.resume())
+                .unwrap_or(Ok(())),
+            mvl_audio::Transport::Stopped => {
+                // Rendering (if due) happens synchronously so playback
+                // always matches the sliders.
+                if self.dirty.get() {
+                    self.render_now();
+                }
+                match self.playback_source() {
+                    Some(buffer) => self
+                        .player
+                        .borrow_mut()
+                        .as_mut()
+                        .map_or(Ok(()), |p| p.play(buffer)),
+                    None => Ok(()),
+                }
+            }
+        };
+        if let Err(e) = result {
+            self.compose_status(Some(&format!("playback failed: {e}")));
+        }
+    }
+
+    fn record_toggle(&self) {
+        if self.recorder.borrow().is_some() {
+            let recorder = self.recorder.borrow_mut().take();
+            if let Some(recorder) = recorder {
+                let overflow = recorder.dropped_overflow();
+                match recorder.stop() {
+                    Ok(buffer) => {
+                        let secs = buffer.duration_secs();
+                        let sr = buffer.sample_rate();
+                        let ch = buffer.channels();
+                        self.load_audio(buffer, "recording");
+                        self.compose_status(Some(&format!(
+                            "recorded {secs:.1} s @ {sr} Hz · {ch} ch{}",
+                            if overflow {
+                                " · OVERFLOW: some input was dropped"
+                            } else {
+                                ""
+                            }
+                        )));
+                    }
+                    Err(e) => self.compose_status(Some(&format!("capture failed: {e}"))),
+                }
+            }
+            return;
+        }
+        // Arming: stop playback first (single capture stream policy).
+        if let Some(p) = self.player.borrow_mut().as_ref() {
+            let _ = p.stop();
+        }
+        match mvl_audio::Recorder::start() {
+            Ok(recorder) => {
+                let info = recorder.info().clone();
+                let matched = info.matched_preferred_rate;
+                *self.record_started.borrow_mut() = Some(Instant::now());
+                *self.recorder.borrow_mut() = Some(recorder);
+                self.compose_status(Some(&format!(
+                    "recording @ {} Hz{}",
+                    info.sample_rate,
+                    if matched {
+                        ""
+                    } else {
+                        " (device capped — 192 kHz unavailable)"
+                    }
+                )));
+            }
+            Err(e) => {
+                self.compose_status(Some(&format!("recording unavailable ({e})")));
+            }
+        }
+    }
+
+    /// 40 ms UI poller: syncs transport state, playhead and readout.
+    fn poll_transport(&self) {
+        let recording = self.recorder.borrow().is_some();
+        self.window.set_recording(recording);
+        if recording {
+            if let Some(start) = *self.record_started.borrow() {
+                let secs = start.elapsed().as_secs_f64();
+                self.window
+                    .set_time_readout(format!("\u{25cf} REC {}", fmt_time(secs)).into());
+            }
+            return;
+        }
+        let player = self.player.borrow();
+        let Some(player) = player.as_ref() else {
+            return;
+        };
+        let transport = player.transport();
+        self.window
+            .set_playing(transport == mvl_audio::Transport::Playing);
+        let duration = self
+            .session
+            .borrow()
+            .as_ref()
+            .map_or(0.0, |s| s.duration_secs());
+        let pos = player.position_secs().min(duration);
+        self.window
+            .set_time_readout(format!("{} / {}", fmt_time(pos), fmt_time(duration)).into());
+        if transport == mvl_audio::Transport::Playing {
+            self.set_playhead(pos);
+        }
     }
 
     /// A/B view switch (waveform chip and `--preview`).
@@ -612,6 +955,15 @@ fn fmt_air(db: f64) -> String {
 
 fn fmt_formant(mm: f64) -> String {
     format!("{mm:.0} mm")
+}
+
+/// Formats seconds as `m:ss.mmm` (time readout).
+fn fmt_time(secs: f64) -> String {
+    let total_ms = (secs.max(0.0) * 1000.0).round() as u64;
+    let m = total_ms / 60_000;
+    let s = (total_ms % 60_000) / 1000;
+    let ms = total_ms % 1000;
+    format!("{m}:{s:02}.{ms:03}")
 }
 
 /// Formats a view span for the zoom readout.

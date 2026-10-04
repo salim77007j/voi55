@@ -1,0 +1,77 @@
+// Copyright © salim77007j
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+// Transport bar: record, rewind-to-start, play/pause, stop, time readout.
+// Every button is wired to the real cpal transport (No-Fake-UI).
+
+import { Tokens } from "tokens.slint";
+import { Icons, IconButton } from "icons.slint";
+
+export component TransportBar inherits Rectangle {
+    height: 52px;
+    background: Tokens.bg-base;
+
+    in property <bool> has-project: false;
+    in property <bool> playing: false;
+    in property <bool> recording: false;
+    in property <string> time-readout;
+    in property <string> t-record;
+    // Transport commands (handled in Rust).
+    callback play-pause();
+    callback stop();
+    callback rewind();
+    callback record-toggle();
+
+    HorizontalLayout {
+        padding-left: Tokens.sp-2;
+        padding-right: Tokens.sp-2;
+        spacing: Tokens.sp-1;
+        alignment: start;
+
+        // Record: red glyph while armed, pulses via opacity animation.
+        rec := IconButton {
+            icon: Icons.record;
+            glyph: root.recording ? Tokens.state-record : Tokens.text-primary;
+            enabled: root.has-project;
+            clicked => { root.record-toggle(); }
+        }
+
+        IconButton {
+            icon: Icons.rewind;
+            enabled: root.has-project;
+            clicked => { root.rewind(); }
+        }
+
+        playbtn := IconButton {
+            icon: root.playing ? Icons.pause : Icons.play;
+            glyph: root.playing ? Tokens.state-play : Tokens.text-primary;
+            enabled: root.has-project;
+            clicked => { root.play-pause(); }
+        }
+
+        IconButton {
+            icon: Icons.stop;
+            enabled: root.has-project;
+            clicked => { root.stop(); }
+        }
+
+        // Time readout (tabular feel via right-aligned fixed box).
+        Text {
+            text: root.time-readout;
+            color: Tokens.text-primary;
+            font-size: Tokens.font-size-value;
+            vertical-alignment: center;
+            width: 180px;
+            horizontal-alignment: center;
+        }
+
+        Rectangle {} // spring
+
+        if root.recording: Text {
+            text: root.t-record;
+            color: Tokens.state-record;
+            vertical-alignment: center;
+            animate opacity { duration: 300ms; iteration-count: 2; direction: alternate; }
+        }
+    }
+}

@@ -11,7 +11,8 @@
 import { Tokens } from "tokens.slint";
 import { WaveformPanel } from "waveform-panel.slint";
 import { PrecisionSlider } from "precision-slider.slint";
-import { Icons, IconButton } from "icons.slint";
+import { Icons, IconButton, ChipButton } from "icons.slint";
+import { TransportBar } from "transport-bar.slint";
 
 import "../../../assets/fonts/Inter-Regular.ttf";
 import "../../../assets/fonts/Inter-Medium.ttf";
@@ -83,6 +84,27 @@ export component AppWindow inherits Window {
     in property <string> t-air;
     in property <string> t-formant;
 
+    // -- Import / export / transport ----------------------------------
+    in property <bool> export-open: false;
+    in property <int> export-format: 0;   // 0 f32, 1 i24, 2 i16, 3 mp3
+    in property <int> export-bitrate: 320;
+    callback import-clicked();
+    callback export-clicked();
+    callback export-format-changed(int);
+    callback export-bitrate-changed(int);
+    callback export-confirm();
+    in property <bool> playing: false;
+    in property <bool> recording: false;
+    in property <string> time-readout;
+    in property <string> t-record;
+    in property <string> t-export-title;
+    in property <string> t-export-go;
+    in property <string> t-bitrate;
+    callback play-pause();
+    callback transport-stop();
+    callback transport-rewind();
+    callback record-toggle();
+
     VerticalLayout {
         spacing: 0;
         padding: 0;
@@ -120,9 +142,93 @@ export component AppWindow inherits Window {
                 }
 
                 Rectangle {} // spring
-                // Import / export / language controls land in 4.4 / 4.5 —
-                // no placeholder buttons (No-Fake-UI).
+
+                IconButton {
+                    icon: Icons.import;
+                    enabled: true;
+                    clicked => { root.import-clicked(); }
+                }
+
+                expbtn := IconButton {
+                    icon: Icons.export;
+                    enabled: root.has-project;
+                    clicked => { root.export-clicked(); }
+                }
             }
+
+            if root.has-project && root.export-open: export-panel := Rectangle {
+                    x: parent.width - self.width - Tokens.sp-2;
+                    y: parent.height + 4px;
+                    width: 240px;
+                    height: 168px;
+                    background: Tokens.bg-elevated;
+                    border-radius: Tokens.radius-md;
+                    border-width: 1px;
+                    border-color: Tokens.border-subtle;
+
+                    VerticalLayout {
+                        padding: Tokens.sp-1;
+                        spacing: Tokens.sp-half;
+
+                        Text {
+                            text: root.t-export-title;
+                            color: Tokens.text-muted;
+                            font-size: Tokens.font-size-small;
+                            height: 14px;
+                        }
+
+                        HorizontalLayout {
+                            spacing: Tokens.sp-half;
+                            height: 28px;
+                            ChipButton { label: "f32"; active: root.export-format == 0; clicked => { root.export-format-changed(0); } }
+                            ChipButton { label: "24";   active: root.export-format == 1; clicked => { root.export-format-changed(1); } }
+                            ChipButton { label: "16";   active: root.export-format == 2; clicked => { root.export-format-changed(2); } }
+                            ChipButton { label: "MP3";  active: root.export-format == 3; clicked => { root.export-format-changed(3); } }
+                        }
+
+                        // Bitrate row (MP3 only) — configurable per D5.
+                        if root.export-format == 3: HorizontalLayout {
+                            spacing: Tokens.sp-half;
+                            height: 28px;
+                            Text {
+                                text: root.t-bitrate;
+                                color: Tokens.text-muted;
+                                font-size: Tokens.font-size-small;
+                                vertical-alignment: center;
+                                width: 56px;
+                            }
+                            for b in [128, 192, 256, 320]: ChipButton {
+                                label: "{b}";
+                                active: root.export-bitrate == b;
+                                clicked => { root.export-bitrate-changed(b); }
+                            }
+                        }
+
+                        Rectangle { height: 4px; }
+
+                        export-go := Rectangle {
+                            height: 30px;
+                            border-radius: Tokens.radius-sm;
+                            background: export-touch.has-hover ? Tokens.bg-elevated-hover : Tokens.bg-base;
+                            border-width: 1px;
+                            border-color: Tokens.accent-pitch;
+
+                            export-touch := TouchArea {
+                                clicked => { root.export-confirm(); }
+                            }
+
+                            Text {
+                                text: root.t-export-go;
+                                color: Tokens.text-primary;
+                                font-weight: 600;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                width: parent.width;
+                                height: parent.height;
+                            }
+                        }
+                    }
+                }
         }
 
         Rectangle {
@@ -220,6 +326,23 @@ export component AppWindow inherits Window {
                     changed(v) => { root.formant-changed(v); }
                 }
             }
+        }
+
+        Rectangle {
+            height: 1px;
+            background: Tokens.border-subtle;
+        }
+
+        TransportBar {
+            has-project: root.has-project;
+            playing: root.playing;
+            recording: root.recording;
+            time-readout: root.time-readout;
+            t-record: root.t-record;
+            play-pause() => { root.play-pause(); }
+            stop() => { root.transport-stop(); }
+            rewind() => { root.transport-rewind(); }
+            record-toggle() => { root.record-toggle(); }
         }
 
         Rectangle {
