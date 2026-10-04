@@ -14,9 +14,9 @@ like Melodyne. Native on **Windows**, **macOS**, and **Linux**.
 
 | Phase | Scope | Status |
 |---|---|---|
-| 1 | Research + architecture plan | **Complete** (this commit) |
+| 1 | Research + architecture plan | **Complete** |
 | 2 | Project scaffold + audio I/O (capture / import / export / playback) | **Complete** |
-| 3 | DSP engine: pYIN + PSOLA pitch, LPC formant warp, air/breath control | Pending |
+| 3 | DSP engine: pYIN + PSOLA pitch, cepstral formant warp, air/breath control | **Complete** |
 | 4 | Professional UI (English LTR + Arabic RTL), waveform, wired controls | Pending |
 | 5 | CI (Windows / macOS / Linux), integration testing, artifacts | Pending |
 | 6 | Final validation report + tag v1.0.0 | Pending |
