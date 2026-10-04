@@ -34,6 +34,7 @@
 use std::collections::VecDeque;
 
 use crate::error::{CoreError, Result};
+use crate::ola::CarryOla;
 use crate::pyin::PyinResult;
 
 /// Mask smoothing half-width in STFT frames (±2 frames ≈ ±21 ms @48 kHz).
@@ -107,8 +108,10 @@ pub fn process_air(
 
     let len = x.len();
     let frames = (len - 1) / hop + 1;
-    let mut acc = vec![0.0f32; len];
-    let mut wsum = vec![0.0f32; len];
+    // Carry-based OLA (75 % overlap → span 2n; see `ola`). No voicing
+    // crossfade in this stage: the residual path has no bypass blend.
+    let mut ola = CarryOla::new(len, 2 * n);
+    let mut out: Vec<f32> = Vec::with_capacity(len);
 
     let mut in_buf = r2c.make_input_vec();
     let mut spectrum = r2c.make_output_vec();
@@ -119,6 +122,10 @@ pub fn process_air(
     let mut breath_hist: VecDeque<f64> = VecDeque::with_capacity(2 * MASK_SMOOTH_HALF + 1);
 
     for t in 0..frames {
+        // Frame t writes [t·hop, t·hop + n); the previous frame's writes
+        // end at (t−1)·hop + n ≤ t·hop + n − hop, so everything below
+        // t·hop is final (75 % overlap keeps the ring bounded).
+        ola.flush_to(t * hop, x, None, 1e-6, &mut out);
         let start = t * hop;
         let take = usize::min(n, len.saturating_sub(start));
         in_buf[..take].fill(0.0);
@@ -221,20 +228,12 @@ pub fn process_air(
         let inv_n = 1.0 / n as f32;
         for i in 0..take {
             let w = window[i];
-            acc[start + i] += y_out[i] * inv_n * w;
-            wsum[start + i] += w * w;
+            ola.add(start + i, y_out[i] * inv_n * w, w * w);
         }
     }
 
     // Normalize the overlap-add.
-    let mut out = Vec::with_capacity(len);
-    for i in 0..len {
-        out.push(if wsum[i] > 1e-6 {
-            acc[i] / wsum[i]
-        } else {
-            x[i]
-        });
-    }
+    ola.flush_all(x, None, 1e-6, &mut out);
     Ok(out)
 }
 

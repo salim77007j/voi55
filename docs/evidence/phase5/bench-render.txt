@@ -1,0 +1,7 @@
+bench_render: 30 s mono vocal @ 48000 Hz, pitch +2 st / air +6 dB / formant 140 mm (all stages engaged)
+pyin (cold analysis)      :    0.306 s  (97.9× real-time)
+preview (cached pYIN)     :    0.883 s  (34.0× real-time, median of 5)
+cold (pYIN + render)      :    1.194 s  (25.1× real-time, median of 3)
+
+BENCH preview_factor=33.97 pyin_factor=97.88 cold_factor=25.13
+BUDGET OK: preview load = 3 % of one core (< 40 %)

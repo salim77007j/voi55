@@ -18,10 +18,9 @@
 //! and sibilants pass through bit-exactly (gated at p < 0.05) and note
 //! boundaries stay click-free.
 
+use crate::ola::{CarryOla, EnvStream};
 use crate::pyin::{FMAX_HZ, FMIN_HZ, PyinResult};
 
-/// Voicing gate for the exact copy-through path (p below this → input).
-const BYPASS_GATE: f32 = 0.05;
 /// Frames with voicing probability below this do not spawn epochs.
 const EPOCH_VOICED_GATE: f32 = 0.45;
 /// Overlap-add window-sum floor; below it the input sample passes through.
@@ -79,18 +78,26 @@ pub fn pitch_shift(x: &[f32], sample_rate: u32, track: &PyinResult, semitones: f
         periods[i] = p.clamp(min_period, max_period);
     }
 
-    // --- 2. voicing envelope at sample rate ------------------------------
-    let env = voicing_envelope(x.len(), sample_rate, track);
-
     // --- 3. grain overlap-add on the resampled epoch grid ----------------
-    let len = x.len();
-    let mut acc = vec![0.0f32; len];
-    let mut wsum = vec![0.0f32; len];
+    // Carry-based: grains are emitted chronologically and span at most
+    // `half ≤ max_half` on either side of their synthesis position, so a
+    // fixed ring replaces the two full-length accumulation buffers, and
+    // finished samples flush straight into the output (bit-identical adds
+    // in the same order — see `ola`).
+    let max_half = max_period.max(max_period / ratio) + 4.0;
+    let mut ola = CarryOla::new(x.len(), max_half as usize);
+    let mut env = EnvStream::new(track, sample_rate);
+    let mut out: Vec<f32> = Vec::with_capacity(x.len());
 
     let mut epoch_idx = 0usize;
     let mut in_pos = epochs[0] as f64;
     let mut out_pos = epochs[0] as f64;
-    while out_pos < len as f64 && epoch_idx < epochs.len() {
+    while out_pos < x.len() as f64 && epoch_idx < epochs.len() {
+        // Flush everything no future grain can reach (a grain's left edge
+        // is `out_pos − half ≥ out_pos − max_half`).
+        let flush_mark = (out_pos - max_half).max(0.0) as usize;
+        ola.flush_to(flush_mark, x, Some(&mut env), WSUM_FLOOR, &mut out);
+
         // Advance the read pointer to the nearest epoch (monotonic).
         while epoch_idx + 1 < epochs.len()
             && (epochs[epoch_idx + 1] as f64 - in_pos).abs()
@@ -112,20 +119,19 @@ pub fn pitch_shift(x: &[f32], sample_rate: u32, track: &PyinResult, semitones: f
         for j in 0..window {
             let o = start_out + j as i64;
             let s = start_src + j as i64;
-            if o < 0 || o >= len as i64 {
+            if o < 0 || o >= x.len() as i64 {
                 continue;
             }
             // Hann over the (possibly clipped) grain; source reads outside
             // the signal contribute silence but still accumulate window
             // weight, keeping the normalization consistent.
             let w = hann_at(j, window);
-            let sample = if s >= 0 && s < len as i64 {
+            let sample = if s >= 0 && s < x.len() as i64 {
                 x[s as usize]
             } else {
                 0.0
             };
-            acc[o as usize] += sample * w;
-            wsum[o as usize] += w;
+            ola.add(o as usize, sample * w, w);
         }
 
         let step = t0 / ratio;
@@ -138,17 +144,9 @@ pub fn pitch_shift(x: &[f32], sample_rate: u32, track: &PyinResult, semitones: f
         }
     }
 
-    // --- 4. normalize and blend with the voicing envelope ----------------
-    let mut out = Vec::with_capacity(len);
-    for i in 0..len {
-        let v = env[i];
-        let shifted = if wsum[i] > WSUM_FLOOR {
-            acc[i] / wsum[i]
-        } else {
-            x[i]
-        };
-        out.push(v * shifted + (1.0 - v) * x[i]);
-    }
+    // --- 4. flush the tail (normalize + voicing crossfade happen per
+    // sample inside the carry flush) -------------------------------------
+    ola.flush_all(x, Some(&mut env), WSUM_FLOOR, &mut out);
     out
 }
 
@@ -169,39 +167,6 @@ fn refine_epoch(x: &[f32], predicted: f64, period: f64) -> usize {
         }
     }
     best
-}
-
-/// Sample-rate voicing envelope: smoothed p_v per frame, linearly
-/// interpolated; frames below [`BYPASS_GATE`] snap to exact zero so
-/// clearly unvoiced material bypasses bit-exactly.
-pub(crate) fn voicing_envelope(len: usize, sample_rate: u32, track: &PyinResult) -> Vec<f32> {
-    if track.is_empty() {
-        return vec![0.0; len];
-    }
-
-    // 3-frame moving average (~30 ms at the 10 ms hop).
-    let mut sm = vec![0.0f32; track.len()];
-    for (i, sm_i) in sm.iter_mut().enumerate() {
-        let lo = i.saturating_sub(1);
-        let hi = usize::min(i + 1, track.len() - 1);
-        let n = (hi - lo + 1) as f32;
-        *sm_i = track.voiced_prob[lo..=hi].iter().sum::<f32>() / n;
-    }
-
-    let mut env = Vec::with_capacity(len);
-    let mut frame = 0usize;
-    for i in 0..len {
-        let t = i as f64 / sample_rate as f64;
-        // Walk to the frame whose window-center time is nearest.
-        while frame + 1 < track.len()
-            && (track.frame_time(frame + 1) - t).abs() < (t - track.frame_time(frame)).abs()
-        {
-            frame += 1;
-        }
-        let p = sm[frame];
-        env.push(if p < BYPASS_GATE { 0.0 } else { p });
-    }
-    env
 }
 
 /// Periodic Hann value for position `j` in a window of `n` samples.

@@ -215,9 +215,15 @@ pub fn render_to_png(
         Ok(())
     })?;
 
+    // MVL_TIMINGS=1 prints stage costs to stderr (Phase 5 cold-start
+    // harness; zero effect on normal runs and on pixel output).
+    let bench = std::env::var("MVL_TIMINGS").is_ok();
+    let t_start = std::time::Instant::now();
     let app = crate::app::App::new().map_err(|e| e.to_string())?;
     window.set_size(slint::PhysicalSize::new(args.width, args.height));
+    let t_init = t_start.elapsed();
     populate(&app)?;
+    let t_loaded = t_start.elapsed();
     app.window().show().map_err(|e| e.to_string())?;
 
     // Spin the animation clock: 40 ticks × 16 ms = 640 virtual ms, enough
@@ -236,8 +242,21 @@ pub fn render_to_png(
     window.draw_if_needed(|renderer| {
         renderer.render(&mut pixels, w);
     });
+    let t_frame = t_start.elapsed();
+
+    if bench {
+        eprintln!(
+            "timings: init={:?} load={:?} frame={:?} (from process start; load = session+pYIN, frame = animations+render)",
+            t_init,
+            t_loaded - t_init,
+            t_frame - t_loaded
+        );
+    }
 
     save_png(&args.out, &pixels, args.width, args.height)?;
+    if bench {
+        eprintln!("timings: total={:?} (incl. PNG encode)", t_start.elapsed());
+    }
     app.window().hide().map_err(|e| e.to_string())?;
     Ok(())
 }

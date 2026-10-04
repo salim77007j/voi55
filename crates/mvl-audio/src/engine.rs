@@ -62,6 +62,12 @@ pub fn render_mono_to_buffer(
             (rendered, report)
         }
     };
+    if channels == 1 {
+        // Mono in, mono out: hand the rendered samples over without the
+        // interleaving copy (halves the transient peak of preview renders
+        // and mono-session exports; Phase 5 RAM budget).
+        return AudioBuffer::from_interleaved(sample_rate, 1, rendered);
+    }
     let mut out_samples = Vec::with_capacity(rendered.len() * usize::from(channels));
     for s in &rendered {
         out_samples.extend(std::iter::repeat_n(*s, usize::from(channels)));

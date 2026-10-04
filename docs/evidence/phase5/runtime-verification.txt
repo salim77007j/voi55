@@ -1,0 +1,22 @@
+== binary size ==
+target/release/micro-vocal-lab: 23785416 bytes
+BUDGET OK (< 50 MB)
+
+== cold start (empty shell, median of 5) ==
+run 0: 58 ms
+run 1: 57 ms
+run 2: 57 ms
+run 3: 56 ms
+run 4: 56 ms
+(per-stage stderr timings collected in /tmp/mvl-runtime-evidence/cold-timings.log)
+
+== RAM: 3-min 48 kHz stereo session, peak RSS ==
+loaded, no render engaged : 146516 kB peak RSS
+loaded + preview rendered : 195908 kB peak RSS
+BUDGET OK (< 200 MB)
+
+== artifacts ==
+ok: /tmp/mvl-runtime-evidence/cold-0.png
+ok: /tmp/mvl-runtime-evidence/rss-idle.png
+ok: /tmp/mvl-runtime-evidence/rss-render.png
+RUNTIME VERIFICATION PASSED

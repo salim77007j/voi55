@@ -32,28 +32,39 @@ pub fn render_with_track(
     params: &EngineParams,
     track: &PyinResult,
 ) -> Result<(Vec<f32>, RenderReport)> {
-    let mut samples = x.to_vec();
+    // Stages borrow their input and return a fresh vector, so the caller's
+    // slice feeds the first active stage directly — no full-length working
+    // copy, and each previous stage buffer drops as the next one lands
+    // (Phase 5 RAM). Neutral parameters stay a bit-exact copy.
     let mut stages = [false; 3];
 
     // 1. Pitch (TD-PSOLA).
     let semitones = params.pitch_semitones();
-    if semitones.abs() >= 1e-9 {
-        samples = crate::psola::pitch_shift(&samples, sample_rate, track, semitones);
+    let mut samples = if semitones.abs() >= 1e-9 {
         stages[0] = true;
-    }
+        crate::psola::pitch_shift(x, sample_rate, track, semitones)
+    } else {
+        Vec::new() // filled by a later stage, or replaced by the passthrough
+    };
 
     // 2. Formant (vocal-tract length).
     let mm = params.formant_mm();
     if (mm - crate::engine::REFERENCE_VTL_MM).abs() >= 1e-9 {
-        samples = crate::formant::shift_formants(&samples, sample_rate, track, mm)?;
         stages[1] = true;
+        let source: &[f32] = if stages[0] { &samples } else { x };
+        samples = crate::formant::shift_formants(source, sample_rate, track, mm)?;
     }
 
     // 3. Air / breath.
     let air_db = params.air_db();
     if air_db.abs() >= 1e-9 {
-        samples = crate::air::process_air(&samples, sample_rate, track, air_db)?;
         stages[2] = true;
+        let source: &[f32] = if stages[0] || stages[1] { &samples } else { x };
+        samples = crate::air::process_air(source, sample_rate, track, air_db)?;
+    }
+
+    if !stages[0] && !stages[1] && !stages[2] {
+        samples = x.to_vec();
     }
 
     let report = RenderReport {

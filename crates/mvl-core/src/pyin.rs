@@ -185,12 +185,18 @@ pub fn pyin(x: &[f32], sample_rate: u32) -> Result<PyinResult> {
         voiced_prob: Vec::with_capacity(n_frames),
         voiced: Vec::with_capacity(n_frames),
     };
-    let mut obs_v: Vec<Vec<f64>> = Vec::with_capacity(n_frames);
-    let mut obs_uv: Vec<f64> = Vec::with_capacity(n_frames);
-    // Sub-bin period estimates: per frame, per bin, the parabolic-refined
-    // τ of the deepest candidate that landed in that bin.
-    let mut bin_tau = vec![0.0f64; n_bins];
-    let mut obs_tau: Vec<Vec<f64>> = Vec::with_capacity(n_frames);
+    // Streaming Viterbi: each frame's observation row is consumed
+    // immediately (see `ViterbiTrellis`), so nothing per-frame-sized is
+    // retained except the u16 backpointer trellis and the handful of
+    // candidate bins per frame. A previous revision stored three full
+    // per-frame matrices (obs f64 + τ f64 + bp u32 ≈ 22 B/bin/frame),
+    // which peaked at ~192 MB on 3-min sessions — over the RAM budget.
+    let mut trellis = ViterbiTrellis::new(n_bins);
+    // Sub-bin period estimates: per frame, (bin, τ) for every bin that
+    // received candidate mass — at most a handful of entries, kept so the
+    // backtracked path can recover parabolic-refined periods.
+    let mut frame_tau: Vec<Vec<(u16, f64)>> = Vec::with_capacity(n_frames);
+    let mut first_frame = true;
 
     for frame in 0..n_frames {
         let start = frame * hop;
@@ -272,7 +278,7 @@ pub fn pyin(x: &[f32], sample_rate: u32) -> Result<PyinResult> {
         }
 
         bin_weight.fill(0.0);
-        bin_tau.fill(0.0);
+        let mut bin_tau = vec![0.0f64; n_bins];
         let mut p_voiced = 0.0f64;
         for (t, &prior_w) in thresholds.iter().zip(&prior) {
             // First local minimum (ascending τ) below this threshold.
@@ -295,13 +301,25 @@ pub fn pyin(x: &[f32], sample_rate: u32) -> Result<PyinResult> {
             }
         }
 
-        let mut ob = vec![0.0f64; n_bins];
-        ob.copy_from_slice(&bin_weight);
-        obs_v.push(ob);
-        let mut ot = vec![0.0f64; n_bins];
-        ot.copy_from_slice(&bin_tau);
-        obs_tau.push(ot);
-        obs_uv.push((1.0 - p_voiced).clamp(1e-10, 1.0));
+        // Feed the observation row straight into the trellis (streaming;
+        // the row itself is not retained). `voiced_prob` is the summed
+        // candidate mass, identical to summing the old observation row.
+        if first_frame {
+            trellis.init(&bin_weight, (1.0 - p_voiced).clamp(1e-10, 1.0));
+            first_frame = false;
+        } else {
+            trellis.step(&bin_weight, (1.0 - p_voiced).clamp(1e-10, 1.0));
+        }
+        result.voiced_prob.push(p_voiced as f32);
+        frame_tau.push(
+            bin_weight
+                .iter()
+                .zip(bin_tau.iter())
+                .enumerate()
+                .filter(|&(_, (&wgt, _))| wgt > 0.0)
+                .map(|(bin, (_, &tau))| (bin as u16, tau))
+                .collect(),
+        );
 
         if frame == 20 && std::env::var("MVL_PYIN_DEBUG").is_ok() {
             eprintln!(
@@ -327,15 +345,20 @@ pub fn pyin(x: &[f32], sample_rate: u32) -> Result<PyinResult> {
         }
     }
 
-    // --- Viterbi over (n_bins voiced states + 1 unvoiced state) ---------
-    let (path, uv_path) = viterbi(&obs_v, &obs_uv, n_bins);
+    // --- Backtrack the streaming trellis -------------------------------
+    let (path, uv_path) = trellis.finish();
 
     for t in 0..n_frames {
         let voiced = !uv_path[t];
         let f0 = if voiced {
             // Sub-bin precision: prefer the parabolic-refined period of the
             // winning bin over the 10-cent bin center.
-            let tau_star = obs_tau[t][path[t]];
+            let bin = path[t];
+            let tau_star = frame_tau[t]
+                .iter()
+                .find(|(b, _)| *b as usize == bin)
+                .map(|&(_, tau)| tau)
+                .unwrap_or(0.0);
             if tau_star > 0.0 {
                 (sr / tau_star) as f32
             } else {
@@ -345,8 +368,6 @@ pub fn pyin(x: &[f32], sample_rate: u32) -> Result<PyinResult> {
             0.0
         };
         result.f0.push(f0);
-        let pv = obs_v[t].iter().sum::<f64>();
-        result.voiced_prob.push(pv as f32);
         result.voiced.push(voiced);
     }
     Ok(result)
@@ -395,146 +416,181 @@ fn bin_to_f0(bin: usize) -> f32 {
     (FREF_HZ * 2.0f64.powf(bin as f64 * BIN_CENTS / 1200.0)) as f32
 }
 
-/// Max-product (Viterbi) decoding. Returns `(bin_path, uv_flag)`.
+/// Streaming max-product (Viterbi) decoding over `n_bins` voiced states
+/// plus one unvoiced state.
 ///
-/// Scores are initialized from the *observations* of frame 0 (not from a
-/// large negative constant): in `f64`, a −1e18 offset has an ULP of 128,
-/// which would swamp every log-probability difference (|ln p| ≤ 23) and
-/// collapse all states into ties.
-fn viterbi(obs_v: &[Vec<f64>], obs_uv: &[f64], n_bins: usize) -> (Vec<usize>, Vec<bool>) {
-    let n_frames = obs_v.len();
-    if n_frames == 0 {
-        return (Vec::new(), Vec::new());
-    }
-    let floor = 1e-10f64;
-    let neg_inf = f64::NEG_INFINITY;
+/// Memory was the reason this exists: the trellis keeps only the u16
+/// backpointer rows (bin indices fit u16; `n_bins` is the "came from
+/// unvoiced" sentinel) and two score rows. Observation rows are consumed
+/// in `init`/`step` and immediately dropped, so a 3-min session at 48 kHz
+/// costs ~25 MB instead of the ~192 MB a three-matrix trellis needed
+/// (Phase 5 RAM budget fix; the decoding math is unchanged line for line).
+struct ViterbiTrellis {
+    n_bins: usize,
+    log_kernel: Vec<f64>,
+    log_uniform: f64,
+    score_v: Vec<f64>,
+    score_uv: f64,
+    next_v: Vec<f64>,
+    /// Row-major `n_frames × n_bins` backpointers: predecessor bin, or the
+    /// `n_bins` sentinel meaning "came from unvoiced".
+    bp_v: Vec<u16>,
+    /// Per frame: 0 = stayed unvoiced, else best voiced bin + 1.
+    bp_uv: Vec<u32>,
+    frames: usize,
+}
 
-    // Note-continuation kernel: strong stay-probability at Δ=0, the rest
-    // of `P_MOVE` spread over a Laplacian decay (covers vibrato slew and
-    // moderate glissando without taxing straight notes).
-    let mut kernel = [0.0f64; 2 * KERNEL_HALF as usize + 1];
-    let mut lap_sum = 0.0;
-    for (i, k) in kernel.iter_mut().enumerate() {
-        let d = (i as i32 - KERNEL_HALF).abs() as f64;
-        *k = (-d / 3.0).exp();
-        lap_sum += *k;
+impl ViterbiTrellis {
+    fn new(n_bins: usize) -> Self {
+        // Note-continuation kernel: strong stay-probability at Δ=0, the
+        // rest of `P_MOVE` spread over a Laplacian decay (covers vibrato
+        // slew and moderate glissando without taxing straight notes).
+        let mut kernel = [0.0f64; 2 * KERNEL_HALF as usize + 1];
+        let mut lap_sum = 0.0;
+        for (i, k) in kernel.iter_mut().enumerate() {
+            let d = (i as i32 - KERNEL_HALF).abs() as f64;
+            *k = (-d / 3.0).exp();
+            lap_sum += *k;
+        }
+        for (i, k) in kernel.iter_mut().enumerate() {
+            let d = (i as i32 - KERNEL_HALF) as f64;
+            *k = if d == 0.0 {
+                (1.0 - P_MOVE) + P_MOVE * *k / lap_sum
+            } else {
+                P_MOVE * *k / lap_sum
+            };
+        }
+        Self {
+            n_bins,
+            log_kernel: kernel.iter().map(|&k| (P_STAY_VOICED * k).ln()).collect(),
+            log_uniform: (P_UNIFORM_JUMP / n_bins as f64).ln(),
+            score_v: vec![0.0; n_bins],
+            score_uv: 0.0,
+            next_v: vec![0.0; n_bins],
+            bp_v: Vec::new(),
+            bp_uv: Vec::new(),
+            frames: 0,
+        }
     }
-    for (i, k) in kernel.iter_mut().enumerate() {
-        let d = (i as i32 - KERNEL_HALF) as f64;
-        *k = if d == 0.0 {
-            (1.0 - P_MOVE) + P_MOVE * *k / lap_sum
-        } else {
-            P_MOVE * *k / lap_sum
-        };
+
+    /// Scores initialized from the *observations* of frame 0 (not from a
+    /// large negative constant): in `f64`, a −1e18 offset has an ULP of
+    /// 128, which would swamp every log-probability difference
+    /// (|ln p| ≤ 23) and collapse all states into ties.
+    fn init(&mut self, obs_v: &[f64], obs_uv: f64) {
+        let floor = 1e-10f64;
+        for (b, s) in self.score_v.iter_mut().enumerate() {
+            *s = obs_v[b].max(floor).ln();
+        }
+        self.score_uv = obs_uv.max(floor).ln();
+        self.bp_v.resize(self.n_bins, self.n_bins as u16); // frame 0: no predecessor
+        self.bp_uv.push(0);
+        self.frames = 1;
     }
-    let log_kernel: Vec<f64> = kernel.iter().map(|&k| (P_STAY_VOICED * k).ln()).collect();
-    let log_uniform = (P_UNIFORM_JUMP / n_bins as f64).ln();
 
-    let mut score_v = vec![0.0f64; n_bins];
-    for (b, s) in score_v.iter_mut().enumerate() {
-        *s = obs_v[0][b].max(floor).ln();
-    }
-    let mut score_uv = obs_uv[0].max(floor).ln();
-    let mut next_v = vec![0.0f64; n_bins];
+    fn step(&mut self, obs_v: &[f64], obs_uv: f64) {
+        let floor = 1e-10f64;
+        let neg_inf = f64::NEG_INFINITY;
+        let n_bins = self.n_bins;
 
-    // Backpointers: per frame, per voiced bin → predecessor bin, or the
-    // `n_bins` sentinel meaning "came from unvoiced"; uv → 0 = stayed
-    // unvoiced, else best voiced bin + 1.
-    let mut bp_v: Vec<Vec<u32>> = Vec::with_capacity(n_frames);
-    let mut bp_uv: Vec<u32> = Vec::with_capacity(n_frames);
-    bp_v.push(vec![n_bins as u32; n_bins]); // frame 0 has no predecessor
-    bp_uv.push(0);
-
-    for t in 1..n_frames {
         let mut best_bin = 0usize;
         let mut best_v = neg_inf;
-        for (b, &s) in score_v.iter().enumerate() {
+        for (b, &s) in self.score_v.iter().enumerate() {
             if s > best_v {
                 best_v = s;
                 best_bin = b;
             }
         }
 
-        let mut bp = vec![0u32; n_bins];
+        let mut bp = vec![0u16; n_bins];
         for b in 0..n_bins {
             let mut best = neg_inf;
             let mut best_src = 0usize;
-            for (ki, &lk) in log_kernel.iter().enumerate() {
+            for (ki, &lk) in self.log_kernel.iter().enumerate() {
                 let src = b as i32 - (ki as i32 - KERNEL_HALF);
                 if src < 0 || src >= n_bins as i32 {
                     continue;
                 }
-                let s = score_v[src as usize] + lk;
+                let s = self.score_v[src as usize] + lk;
                 if s > best {
                     best = s;
                     best_src = src as usize;
                 }
             }
-            let via_uniform = best_v + log_uniform;
+            let via_uniform = best_v + self.log_uniform;
             if via_uniform > best {
                 best = via_uniform;
                 best_src = best_bin;
             }
-            let via_uv = score_uv + P_UV_TO_V.ln();
+            let via_uv = self.score_uv + P_UV_TO_V.ln();
             if via_uv > best {
                 best = via_uv;
                 best_src = n_bins; // sentinel: from unvoiced
             }
-            next_v[b] = best + obs_v[t][b].max(floor).ln();
-            bp[b] = best_src as u32;
+            self.next_v[b] = best + obs_v[b].max(floor).ln();
+            bp[b] = best_src as u16;
         }
-        let uv_stay = score_uv + P_UV_STAY.ln();
+        let uv_stay = self.score_uv + P_UV_STAY.ln();
         let uv_from_v = best_v + P_V_TO_UV.ln();
-        score_uv = uv_stay.max(uv_from_v) + obs_uv[t].max(floor).ln();
-        bp_uv.push(if uv_stay >= uv_from_v {
+        self.score_uv = uv_stay.max(uv_from_v) + obs_uv.max(floor).ln();
+        self.bp_uv.push(if uv_stay >= uv_from_v {
             0
         } else {
             best_bin as u32 + 1
         });
 
-        std::mem::swap(&mut score_v, &mut next_v);
-        bp_v.push(bp);
+        std::mem::swap(&mut self.score_v, &mut self.next_v);
+        self.bp_v.extend_from_slice(&bp);
+        self.frames += 1;
     }
 
-    // Backtrack from the globally best final state.
-    let mut path = vec![0usize; n_frames];
-    let mut uv_path = vec![false; n_frames];
-    let mut best_v = neg_inf;
-    let mut best_bin = 0usize;
-    for (b, &s) in score_v.iter().enumerate() {
-        if s > best_v {
-            best_v = s;
-            best_bin = b;
+    /// Backtracks from the globally best final state.
+    fn finish(self) -> (Vec<usize>, Vec<bool>) {
+        let n_bins = self.n_bins;
+        let n_frames = self.frames;
+        if n_frames == 0 {
+            return (Vec::new(), Vec::new());
         }
-    }
-    let mut cur_voiced = best_v >= score_uv;
-    let mut cur_bin = best_bin;
-    for t in (0..n_frames).rev() {
-        if cur_voiced {
-            path[t] = cur_bin;
-            uv_path[t] = false;
-            if t == 0 {
-                break;
+        let neg_inf = f64::NEG_INFINITY;
+        let mut path = vec![0usize; n_frames];
+        let mut uv_path = vec![false; n_frames];
+        let mut best_v = neg_inf;
+        let mut best_bin = 0usize;
+        for (b, &s) in self.score_v.iter().enumerate() {
+            if s > best_v {
+                best_v = s;
+                best_bin = b;
             }
-            let src = bp_v[t][cur_bin] as usize;
-            if src == n_bins {
-                cur_voiced = false;
+        }
+        let mut cur_voiced = best_v >= self.score_uv;
+        let mut cur_bin = best_bin;
+        for t in (0..n_frames).rev() {
+            if cur_voiced {
+                path[t] = cur_bin;
+                uv_path[t] = false;
+                if t == 0 {
+                    break;
+                }
+                let src = self.bp_v[t * n_bins + cur_bin] as usize;
+                if src == n_bins {
+                    cur_voiced = false;
+                } else {
+                    cur_bin = src;
+                }
             } else {
-                cur_bin = src;
-            }
-        } else {
-            uv_path[t] = true; // path[t] value is ignored for unvoiced frames
-            if t == 0 {
-                break;
-            }
-            let src = bp_uv[t] as usize;
-            if src > 0 {
-                cur_voiced = true;
-                cur_bin = src - 1;
+                uv_path[t] = true; // path[t] value is ignored for unvoiced frames
+                if t == 0 {
+                    break;
+                }
+                let src = self.bp_uv[t] as usize;
+                if src > 0 {
+                    cur_voiced = true;
+                    cur_bin = src - 1;
+                }
             }
         }
+        (path, uv_path)
     }
-    (path, uv_path)
 }
 
 /// Convenience: cents error between two frequencies.

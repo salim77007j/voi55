@@ -36,12 +36,14 @@ use std::time::Instant;
 /// One completed preview render (A/B view source). `Send` by construction
 /// (plain data), so a background thread can produce it.
 struct PreviewRender {
-    /// The full rendered buffer (playback + export source).
-    #[allow(dead_code)]
+    /// The full rendered buffer, stored **mono**: the render is derived
+    /// from the mono downmix anyway, the Player maps 1→N at output
+    /// (map_channels), and mono halves the A/B memory — a 3-min 48 kHz
+    /// preview costs 34.5 MB instead of the old stereo buffer + display
+    /// downmix pair at 103.5 MB (Phase 5 RAM budget). Playback and the
+    /// waveform/zoom view are unaffected.
     buffer: AudioBuffer,
     pyramid: WaveformPyramid,
-    /// Rendered mono (deep-zoom display source).
-    mono: Arc<Vec<f32>>,
     render_ms: f64,
     params: EngineParams,
 }
@@ -464,7 +466,7 @@ impl App {
             let rendered = mvl_audio::engine::render_mono_to_buffer(
                 &session.mono,
                 session.buffer.sample_rate(),
-                session.buffer.channels(),
+                1, // preview is stored mono (see PreviewRender)
                 &self.params.get(),
                 session.track.as_deref(),
             );
@@ -474,12 +476,10 @@ impl App {
         match outcome {
             Some((buffer, render_ms)) => {
                 let sample_rate = buffer.sample_rate();
-                let mono = Arc::new(mvl_audio::engine::downmix_mono(&buffer));
-                let pyramid = WaveformPyramid::build(&mono, sample_rate);
+                let pyramid = WaveformPyramid::build(buffer.samples(), sample_rate);
                 *self.preview.borrow_mut() = Some(PreviewRender {
                     buffer,
                     pyramid,
-                    mono,
                     render_ms,
                     params: self.params.get(),
                 });
@@ -527,6 +527,17 @@ impl App {
             *self.pending.lock().expect("pending lock") = Some(self.params.get());
             return;
         }
+        // The old preview describes the *previous* parameters; drop it
+        // before the render starts so the two never coexist in memory
+        // (Phase 5 RAM: two previews would double the A/B cost on long
+        // sessions). The A/B view falls back to the original until the
+        // new render lands — the status bar already shows the render.
+        if self.preview.borrow_mut().take().is_some() {
+            self.show_preview.set(false);
+            self.window.set_preview_mode(false);
+            self.window.set_can_preview(false);
+            self.refresh();
+        }
         let session_borrow = self.session.borrow();
         let Some(session) = session_borrow.as_ref() else {
             self.rendering.store(false, Ordering::SeqCst);
@@ -535,7 +546,8 @@ impl App {
         let mono = Arc::clone(&session.mono);
         let track = session.track.clone();
         let sample_rate = session.buffer.sample_rate();
-        let channels = session.buffer.channels();
+        // Preview stores mono (see PreviewRender): the Player maps 1→N at
+        // output, and export still renders the original channel layout.
         let params = self.params.get();
         let rendering = Arc::clone(&self.rendering);
 
@@ -548,7 +560,7 @@ impl App {
             let rendered = mvl_audio::engine::render_mono_to_buffer(
                 &mono,
                 sample_rate,
-                channels,
+                1, // preview is stored mono (see PreviewRender)
                 &params,
                 track.as_deref(),
             );
@@ -556,12 +568,10 @@ impl App {
             rendering.store(false, Ordering::SeqCst);
             let _ = tx.send(match rendered {
                 Ok(buffer) => {
-                    let m = Arc::new(mvl_audio::engine::downmix_mono(&buffer));
-                    let pyramid = WaveformPyramid::build(&m, buffer.sample_rate());
+                    let pyramid = WaveformPyramid::build(buffer.samples(), buffer.sample_rate());
                     RenderDone::Ok(Box::new(PreviewRender {
                         buffer,
                         pyramid,
-                        mono: m,
                         render_ms,
                         params,
                     }))
@@ -977,14 +987,14 @@ impl App {
             match preview.as_ref() {
                 Some(pr) => (
                     &pr.pyramid,
-                    &pr.mono,
+                    pr.buffer.samples(),
                     None,
                     PREVIEW_COLORS,
                     i18n::tpl(t.track_preview, &[("name", name)]),
                 ),
                 None => (
                     &s.pyramid,
-                    &s.mono,
+                    s.mono.as_slice(),
                     s.track.as_deref(),
                     STUDIO_COLORS,
                     i18n::tpl(t.track_original, &[("name", name)]),
@@ -993,7 +1003,7 @@ impl App {
         } else {
             (
                 &s.pyramid,
-                &s.mono,
+                s.mono.as_slice(),
                 s.track.as_deref(),
                 STUDIO_COLORS,
                 i18n::tpl(t.track_original, &[("name", name)]),

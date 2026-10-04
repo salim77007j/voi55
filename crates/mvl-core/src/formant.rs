@@ -28,7 +28,7 @@
 //! preserved (verified by the pYIN gate below).
 
 use crate::error::{CoreError, Result};
-use crate::psola::voicing_envelope;
+use crate::ola::{CarryOla, EnvStream};
 use crate::pyin::PyinResult;
 use rustfft::num_complex::Complex;
 
@@ -83,10 +83,13 @@ pub fn shift_formants(
         .collect();
 
     let len = x.len();
-    let mut acc = vec![0.0f32; len];
-    let mut wsum = vec![0.0f32; len];
-
-    let env = voicing_envelope(len, sample_rate, track);
+    // Carry-based weighted OLA: frame t writes [t·hop, t·hop + n), so a
+    // fixed ring of span n replaces the two full-length buffers; finished
+    // samples flush to the output before each frame (bit-identical adds —
+    // see `ola`).
+    let mut ola = CarryOla::new(len, n);
+    let mut env = EnvStream::new(track, sample_rate);
+    let mut out: Vec<f32> = Vec::with_capacity(len);
     let frames = (len - 1) / hop + 1;
 
     let mut spectrum = r2c.make_output_vec();
@@ -101,6 +104,9 @@ pub fn shift_formants(
     let mut env_w = vec![0.0f64; band_bins + 2];
 
     for frame in 0..frames {
+        // Everything before this frame's write window is complete: the
+        // previous frame wrote up to (frame−1)·hop + n, which is covered.
+        ola.flush_to(frame * hop, x, Some(&mut env), WSUM_FLOOR, &mut out);
         let start = frame * hop;
         let take = usize::min(n, len.saturating_sub(start));
         in_buf[..take].fill(0.0);
@@ -191,23 +197,13 @@ pub fn shift_formants(
         let inv_n = 1.0 / n as f32;
         for i in 0..take {
             let w = window[i];
-            acc[start + i] += y_out[i] * inv_n * w;
-            wsum[start + i] += w * w;
+            ola.add(start + i, y_out[i] * inv_n * w, w * w);
         }
     }
 
     // Weighted-OLA normalize, then voicing crossfade (exact bypass where
     // the envelope is zero — sibilance and breath never warp).
-    let mut out = Vec::with_capacity(len);
-    for i in 0..len {
-        let v = env[i];
-        let warped = if wsum[i] > WSUM_FLOOR {
-            acc[i] / wsum[i]
-        } else {
-            x[i]
-        };
-        out.push(v * warped + (1.0 - v) * x[i]);
-    }
+    ola.flush_all(x, Some(&mut env), WSUM_FLOOR, &mut out);
     Ok(out)
 }
 
