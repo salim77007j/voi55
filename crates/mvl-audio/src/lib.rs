@@ -1,0 +1,23 @@
+//! Micro-Vocal Lab audio I/O layer.
+//!
+//! Responsibilities (architecture plan D2–D6):
+//!
+//! - [`buffer`] — the shared interleaved `f32` [`AudioBuffer`] type.
+//! - [`capture`] — microphone recording via `cpal`, requesting 192 kHz /
+//!   32-bit float and honestly reporting what the device actually granted.
+//! - [`player`] — play/pause/stop playback via `cpal`.
+//! - [`wav`] — lossless WAV import/export via `hound` (f32/i16/i24, up to
+//!   192 kHz).
+//! - [`mp3`] — MP3 import via `symphonia`, MP3 export via LAME
+//!   (`mp3lame-encoder`), with automatic resampling for rates MP3 cannot
+//!   carry (e.g. 96/192 kHz → 48 kHz).
+//!
+//! Error handling policy: no `unwrap()`/`panic!` on user or audio data
+//! anywhere in this crate — every fallible path returns
+//! [`AudioResultResult`](`Result`) with [`AudioError`].
+
+pub mod buffer;
+pub mod error;
+
+pub use buffer::AudioBuffer;
+pub use error::{AudioError, Result};

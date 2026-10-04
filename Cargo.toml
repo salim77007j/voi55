@@ -1,0 +1,29 @@
+[workspace]
+resolver = "3"
+members = ["crates/mvl-core", "crates/mvl-audio", "crates/mvl-app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "GPL-3.0-or-later"
+authors = ["salim77007j"]
+repository = "https://github.com/salim77007j/voi55"
+homepage = "https://github.com/salim77007j/voi55"
+
+[workspace.dependencies]
+# Audio I/O
+cpal = "0.18"
+# File containers / codecs
+hound = "3.5"
+symphonia = { version = "0.6", default-features = false, features = ["mp3"] }
+mp3lame-encoder = "0.2"
+# Utilities
+thiserror = "2"
+log = "0.4"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true

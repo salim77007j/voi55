@@ -1,0 +1,17 @@
+[package]
+name = "mvl-audio"
+description = "Micro-Vocal Lab audio I/O: cpal capture/playback, WAV/MP3 import-export"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+cpal.workspace = true
+hound.workspace = true
+symphonia.workspace = true
+mp3lame-encoder.workspace = true
+thiserror.workspace = true
+log.workspace = true

@@ -1,0 +1,11 @@
+[package]
+name = "mvl-core"
+description = "Micro-Vocal Lab DSP engine: pitch (pYIN + PSOLA), formant (LPC warp), air/breath"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
