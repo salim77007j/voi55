@@ -20,11 +20,11 @@ fn main() {
     );
     report_inputs();
 
-    if args.iter().any(|a| a == "--selftest-audio") {
-        if let Err(err) = playback_selftest() {
-            eprintln!("Audio self-test failed: {err}");
-            std::process::exit(1);
-        }
+    if args.iter().any(|a| a == "--selftest-audio")
+        && let Err(err) = playback_selftest()
+    {
+        eprintln!("Audio self-test failed: {err}");
+        std::process::exit(1);
     }
 }
 
@@ -47,7 +47,7 @@ fn playback_selftest() -> Result<(), mvl_audio::AudioError> {
     let (rate, channels) = player.output_format();
     println!("  output: {rate} Hz / {channels} ch (f32)");
 
-    let sine = AudioBuffer::sine(1.0, 48_000, u16::from(channels).max(1).min(2), 440.0)?;
+    let sine = AudioBuffer::sine(1.0, 48_000, channels.clamp(1, 2), 440.0)?;
     player.play(Arc::new(sine))?;
     println!("  transport after play(): {:?}", player.transport());
 

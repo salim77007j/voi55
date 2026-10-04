@@ -11,7 +11,7 @@
 use crate::buffer::AudioBuffer;
 use crate::error::{AudioError, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{BufferSize, Device, SampleFormat, Stream, StreamConfig};
+use cpal::{Device, SampleFormat, Stream};
 use std::sync::{Arc, Mutex};
 
 /// Transport state of the player.
@@ -34,7 +34,8 @@ struct PlayState {
 /// A connected output player.
 pub struct Player {
     shared: Arc<Mutex<PlayState>>,
-    stream: Option<Stream>,
+    /// Kept alive for the lifetime of the player; dropped on `Drop`.
+    _stream: Option<Stream>,
     output_rate: u32,
     output_channels: u16,
 }
@@ -137,7 +138,7 @@ impl Player {
 
         Ok(Self {
             shared,
-            stream: Some(stream),
+            _stream: Some(stream),
             output_rate,
             output_channels,
         })
