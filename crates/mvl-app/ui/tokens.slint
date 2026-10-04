@@ -1,0 +1,51 @@
+// Copyright © salim77007j
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+// "Studio Graphite" design tokens — architecture plan D13.
+// One global, imported by every widget: the palette, the 8 pt spacing grid,
+// the radius scale and the motion curve live here so no .slint file ever
+// hardcodes a color or spacing value.
+
+export global Tokens {
+    // ── Palette (D13) ────────────────────────────────────────────────
+    out property <color> bg-base: #12151A;          // window background
+    out property <color> bg-surface: #1A1F26;       // panels, waveform well
+    out property <color> bg-elevated: #212831;      // toolbar, status chrome
+    out property <color> bg-elevated-hover: #262E38; // hover = +4 % lightness
+    out property <color> bg-elevated-press: #2B343F; // press = +8 % lightness
+    out property <color> border-subtle: #2C3440;    // 1 px hairlines
+    out property <color> text-primary: #E7EBF0;     // ≥ 12.4:1 on base
+    out property <color> text-muted: #8C97A6;       // ≥ 4.9:1 on base
+    out property <color> accent-pitch: #5AA7FF;     // pitch slider / trace
+    out property <color> accent-air: #46D6A5;       // air slider / trace
+    out property <color> accent-formant: #B78CFF;   // formant slider / trace
+    out property <color> state-record: #FF4D4F;     // record state, clip
+    out property <color> state-play: #3DDC84;       // play state
+    out property <color> state-warn: #FFB020;       // device fallback notices
+
+    // ── 8 pt spacing grid ────────────────────────────────────────────
+    out property <length> sp-half: 4px;
+    out property <length> sp-1: 8px;
+    out property <length> sp-2: 16px;
+    out property <length> sp-3: 24px;
+    out property <length> sp-4: 32px;
+
+    // ── Radius scale ─────────────────────────────────────────────────
+    out property <length> radius-sm: 6px;
+    out property <length> radius-md: 10px;
+    out property <length> radius-lg: 14px;
+
+    // ── Motion: 120–160 ms, cubic-bezier(0.2, 0.7, 0.3, 1) ──────────
+    out property <duration> anim-fast: 120ms;
+    out property <duration> anim-normal: 160ms;
+    out property <easing> motion: cubic-bezier(0.2, 0.7, 0.3, 1);
+
+    // ── Typography (D12) ─────────────────────────────────────────────
+    // Latin UI face. Arabic UI switches the window's default-font-family
+    // to "IBM Plex Sans Arabic" at runtime (i18n, sub-item 4.5).
+    out property <string> font-latin: "Inter";
+    out property <string> font-arabic: "IBM Plex Sans Arabic";
+    out property <length> font-size-body: 13px;
+    out property <length> font-size-small: 11px;
+    out property <length> font-size-value: 15px;
+}

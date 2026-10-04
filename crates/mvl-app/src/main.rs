@@ -1,22 +1,39 @@
 //! Micro-Vocal Lab — desktop application entry point.
 //!
-//! Phase 2: links the workspace together and reports the audio environment.
-//! `--selftest-audio` runs a real end-to-end playback exercise (a generated
-//! sine through the output device, exercising the player transport).
-//! The Slint UI replaces this in Phase 4.
+//! Modes:
+//! - **GUI** (default): the Slint window (Studio Graphite) on the platform
+//!   backend (winit/femtovg on desktop).
+//! - `--screenshot --out P [--width N] [--height N]`: renders the real UI
+//!   headlessly into a PNG (evidence pipeline, D14; also drives
+//!   `tests/screenshot.rs`).
+//! - `--selftest-audio`: legacy Phase 2 playback self-test, kept for CI.
+//!
+//! All logic lives in the `mvl-app` library; this binary only parses the
+//! command line.
 
-use mvl_audio::{AudioBuffer, PREFERRED_SAMPLE_RATE, Player, list_input_devices};
-use mvl_core as core;
-use std::sync::Arc;
+use mvl_app::{app, headless};
+use mvl_audio::{AudioBuffer, Player};
+use slint::ComponentHandle;
 use std::time::{Duration, Instant};
 
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    println!("Micro-Vocal Lab v{} — audio I/O (Phase 2)", core::VERSION);
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--screenshot") {
+        if let Err(err) = screenshot_mode(&args) {
+            eprintln!("Screenshot failed: {err}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    println!(
+        "Micro-Vocal Lab v{} — Slint UI (Phase 4)",
+        mvl_core::VERSION
+    );
     println!("Engine contract: pitch ±12 st / 1 cent · air ±dB / 0.1 dB · formant 130–190 mm.");
     println!(
         "Capture requests {} Hz / f32 (device maximum used when unavailable).",
-        PREFERRED_SAMPLE_RATE
+        mvl_audio::PREFERRED_SAMPLE_RATE
     );
     report_inputs();
 
@@ -26,10 +43,33 @@ fn main() {
         eprintln!("Audio self-test failed: {err}");
         std::process::exit(1);
     }
+
+    if let Err(err) = gui_mode() {
+        eprintln!("GUI failed to start: {err}");
+        std::process::exit(1);
+    }
+}
+
+fn screenshot_mode(args: &[String]) -> Result<(), String> {
+    let parsed = headless::parse_args(args)?;
+    headless::render_to_png(&parsed, |_app| {
+        // Population of engine/demo state lands with the waveform and
+        // slider sub-items; 4.1 renders the shell with default strings.
+    })?;
+    println!("Screenshot written: {}", parsed.out.display());
+    Ok(())
+}
+
+fn gui_mode() -> Result<(), String> {
+    let app = app::create().map_err(|e| e.to_string())?;
+    app.window()
+        .show()
+        .map_err(|e| format!("cannot show window: {e}"))?;
+    slint::run_event_loop().map_err(|e| format!("event loop: {e}"))
 }
 
 fn report_inputs() {
-    match list_input_devices() {
+    match mvl_audio::list_input_devices() {
         Ok(devices) if devices.is_empty() => println!("No input devices found on this system."),
         Ok(devices) => {
             for d in &devices {
@@ -48,7 +88,7 @@ fn playback_selftest() -> Result<(), mvl_audio::AudioError> {
     println!("  output: {rate} Hz / {channels} ch (f32)");
 
     let sine = AudioBuffer::sine(1.0, 48_000, channels.clamp(1, 2), 440.0)?;
-    player.play(Arc::new(sine))?;
+    player.play(std::sync::Arc::new(sine))?;
     println!("  transport after play(): {:?}", player.transport());
 
     let start = Instant::now();

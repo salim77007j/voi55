@@ -24,12 +24,12 @@ fn write_wav(path: &Path, x: &[f32]) -> std::io::Result<()> {
         bits_per_sample: 16,
         sample_format: SampleFormat::Int,
     };
-    let mut writer = WavWriter::create(path, spec).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let mut writer = WavWriter::create(path, spec).map_err(std::io::Error::other)?;
     for &s in x {
         let v = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
-        writer.write_sample(v).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        writer.write_sample(v).map_err(std::io::Error::other)?;
     }
-    writer.finalize().map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    writer.finalize().map_err(std::io::Error::other)?;
     Ok(())
 }
 
@@ -49,11 +49,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ---- fixture B: phrase with breath bursts between vowels ------------
     let seg = SR as usize * 2 / 5;
     let mut rng_b = Rng::new(1602);
-    let mut vowel_b = synth::vowel(&synth::f0_track_const(175.0, seg), SR, &VS::default(), &mut rng_b);
+    let mut vowel_b = synth::vowel(
+        &synth::f0_track_const(175.0, seg),
+        SR,
+        &VS::default(),
+        &mut rng_b,
+    );
     for &f in &[190.0f32, 165.0] {
         let burst = synth::white_noise(seg / 2, &mut rng_b);
         vowel_b.extend(burst.iter().map(|v| v * 0.25));
-        vowel_b.append(&mut synth::vowel(&synth::f0_track_const(f, seg), SR, &VS::default(), &mut rng_b));
+        vowel_b.append(&mut synth::vowel(
+            &synth::f0_track_const(f, seg),
+            SR,
+            &VS::default(),
+            &mut rng_b,
+        ));
     }
     write_wav(&out.join("vocal_b_breathy.wav"), &vowel_b)?;
 
@@ -134,7 +144,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // breath-burst fixture B, inter-phrase segment only).
     let b_mid = &vowel_b[seg..seg + seg / 2];
     let b_mid_out = &b_air[seg..seg + seg / 2];
-    let rms = |x: &[f32]| (x.iter().map(|v| f64::from(*v) * f64::from(*v)).sum::<f64>() / x.len() as f64).sqrt();
+    let rms = |x: &[f32]| {
+        (x.iter().map(|v| f64::from(*v) * f64::from(*v)).sum::<f64>() / x.len() as f64).sqrt()
+    };
     m.push_str(&format!(
         "B air −18dB: inter-phrase breath RMS {:.4} → {:.4} ({:+.1} dB)\n",
         rms(b_mid),

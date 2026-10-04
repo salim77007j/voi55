@@ -1,6 +1,6 @@
 [package]
 name = "mvl-app"
-description = "Micro-Vocal Lab desktop application (Slint UI lands in Phase 4)"
+description = "Micro-Vocal Lab desktop application (Slint UI, Phase 4+)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,6 +12,16 @@ repository.workspace = true
 name = "micro-vocal-lab"
 path = "src/main.rs"
 
+[build-dependencies]
+slint-build = { workspace = true }
+
 [dependencies]
 mvl-core = { path = "../mvl-core" }
 mvl-audio = { path = "../mvl-audio" }
+slint = { workspace = true }
+png = { workspace = true }
+
+[features]
+# Headless screenshot mode for evidence generation and CI smoke tests.
+# Kept as a feature so embedded-style platforms stay optional.
+default = []

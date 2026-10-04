@@ -1,0 +1,148 @@
+// Copyright © salim77007j
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+// Micro-Vocal Lab — root window.
+//
+// Phase 4.1 skeleton: Studio Graphite shell with the header, the waveform
+// well (populated by the waveform engine in 4.2) and the status bar.
+// Fonts are embedded at compile time from `assets/fonts` (D12): Inter for
+// the Latin UI, IBM Plex Sans Arabic for the RTL/Arabic UI (4.5).
+
+import { Tokens } from "tokens.slint";
+
+import "../../../assets/fonts/Inter-Regular.ttf";
+import "../../../assets/fonts/Inter-Medium.ttf";
+import "../../../assets/fonts/Inter-SemiBold.ttf";
+import "../../../assets/fonts/IBMPlexSansArabic-Regular.ttf";
+import "../../../assets/fonts/IBMPlexSansArabic-Medium.ttf";
+import "../../../assets/fonts/IBMPlexSansArabic-SemiBold.ttf";
+
+export component AppWindow inherits Window {
+    title: root.t-title;
+    preferred-width: 1280px;
+    preferred-height: 800px;
+    min-width: 960px;
+    min-height: 640px;
+    background: Tokens.bg-base;
+    default-font-family: root.ui-font;
+    default-font-size: Tokens.font-size-body;
+
+    // ── Runtime state surfaced from Rust ─────────────────────────────
+    // UI font family (Inter for LTR English, IBM Plex Sans Arabic for
+    // RTL Arabic — switched by the i18n layer, sub-item 4.5).
+    in property <string> ui-font: Tokens.font-latin;
+    // Layout direction flag: false = LTR (English), true = RTL (Arabic).
+    // Slint 1.18 shapes bidi/Arabic text natively but does NOT mirror
+    // layouts automatically; every container binds its children's
+    // `layout-order` to this flag (see Tokens.rtl — sub-item 4.5).
+    in property <bool> rtl: false;
+
+    // Localized strings (populated from the Rust i18n table, 4.5).
+    in property <string> t-title;
+    in property <string> t-waveform-empty;
+    // App version, set from Cargo metadata by the Rust bridge.
+    in property <string> t-version;
+
+    // Report line for the status bar (format / engine state).
+    in property <string> status-core;
+
+    VerticalLayout {
+        spacing: 0;
+        padding: 0;
+
+        // ── Header (bg/elevated, 56 px) ─────────────────────────────
+        Rectangle {
+            height: 56px;
+            background: Tokens.bg-elevated;
+
+            HorizontalLayout {
+                padding-left: Tokens.sp-2;
+                padding-right: Tokens.sp-2;
+                spacing: Tokens.sp-1;
+
+                // Brand mark: rounded accent square.
+                Rectangle {
+                    width: 24px;
+                    height: 24px;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: Tokens.radius-sm;
+                    background: Tokens.accent-pitch;
+                }
+
+                Text {
+                    text: "Micro-Vocal Lab";
+                    font-weight: 600;
+                    color: Tokens.text-primary;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: root.t-version;
+                    color: Tokens.text-muted;
+                    vertical-alignment: center;
+                }
+
+                Rectangle {} // spring
+                // Import / export / language controls land in 4.4 / 4.5 —
+                // no placeholder buttons (No-Fake-UI).
+            }
+        }
+
+        Rectangle {
+            height: 1px;
+            background: Tokens.border-subtle;
+        }
+
+        // ── Waveform well (fills the body) ──────────────────────────
+        Rectangle {
+            background: Tokens.bg-base;
+
+            VerticalLayout {
+                padding: Tokens.sp-2;
+                spacing: Tokens.sp-1;
+
+                Rectangle {
+                    background: Tokens.bg-surface;
+                    border-radius: Tokens.radius-md;
+                    border-width: 1px;
+                    border-color: Tokens.border-subtle;
+
+                    // Empty-state hint (replaced by the waveform view in 4.2).
+                    Text {
+                        text: root.t-waveform-empty;
+                        color: Tokens.text-muted;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            height: 1px;
+            background: Tokens.border-subtle;
+        }
+
+        // ── Status bar (bg/elevated, 32 px) ─────────────────────────
+        Rectangle {
+            height: 32px;
+            background: Tokens.bg-elevated;
+
+            HorizontalLayout {
+                padding-left: Tokens.sp-1;
+                padding-right: Tokens.sp-1;
+                spacing: Tokens.sp-2;
+
+                Text {
+                    text: root.status_core;
+                    color: Tokens.text-muted;
+                    font-size: Tokens.font-size-small;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+
+                Rectangle {} // spring
+            }
+        }
+    }
+}

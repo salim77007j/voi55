@@ -24,6 +24,11 @@ rustfft = "6"
 # Utilities
 thiserror = "2"
 log = "0.4"
+# UI (D1: Slint — RTL/Arabic first-class, declarative, no webview)
+slint = { version = "1.18", features = ["renderer-software"] }
+slint-build = "1.18"
+# PNG encoding for the headless screenshot mode (evidence pipeline, D14)
+png = "0.18"
 
 [profile.release]
 opt-level = 3
