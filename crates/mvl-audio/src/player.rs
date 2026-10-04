@@ -2,14 +2,21 @@
 //! D2/D6).
 //!
 //! The player owns an `f32` output stream on the default output device and
-//! consumes [`AudioBuffer`]s. Buffers are transparently resampled to the
-//! output device's rate (via [`crate::resample`]) and channel-mapped in the
-//! callback. Transport transitions are safe to call from any thread; the
-//! real-time callback only ever locks the state mutex briefly and never
-//! allocates.
+//! consumes [`AudioBuffer`]s — or, since Phase 6, a streaming preview
+//! [`StreamFifo`] (see [`crate::preview`]): the callback pulls mono frames
+//! from the FIFO and maps them to the output channels, so the transport
+//! works identically for both sources. The FIFO source requires the
+//! session rate to match the device rate (the caller checks; there is no
+//! resampler on the real-time path — disclosed).
+//!
+//! Buffers are transparently resampled to the output device's rate (via
+//! [`crate::resample`]) and channel-mapped in the callback. Transport
+//! transitions are safe to call from any thread; the real-time callback
+//! only ever locks the state mutex briefly and never allocates.
 
 use crate::buffer::AudioBuffer;
 use crate::error::{AudioError, Result};
+use crate::preview::StreamFifo;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream};
 use std::sync::{Arc, Mutex};
@@ -26,6 +33,9 @@ pub enum Transport {
 #[derive(Debug, Default)]
 struct PlayState {
     buffer: Option<Arc<AudioBuffer>>,
+    /// Streaming preview source (Phase 6). Takes precedence over `buffer`
+    /// while set; the two are mutually exclusive.
+    fifo: Option<Arc<StreamFifo>>,
     position: usize,
     transport: Transport,
     stream_error: Option<String>,
@@ -106,6 +116,26 @@ impl Player {
                         if state.transport != Transport::Playing {
                             return;
                         }
+                        // Streaming preview source (Phase 6): pull mono
+                        // frames from the FIFO and map 1→N. The player-state
+                        // lock is released before the (brief) FIFO lock to
+                        // keep callback contention minimal.
+                        if let Some(fifo) = state.fifo.clone() {
+                            drop(state);
+                            let frames = fifo.pull_mono_into(data, u32::from(out_channels));
+                            if frames == 0
+                                && fifo.total_frames() > 0
+                                && fifo.read_frame() >= fifo.total_frames()
+                            {
+                                // End of material: stop (the cursor stays
+                                // where playback ended — no rewind on a
+                                // stream).
+                                if let Ok(mut st) = shared.lock() {
+                                    st.transport = Transport::Stopped;
+                                }
+                            }
+                            return;
+                        }
                         let Some(buffer) = state.buffer.clone() else {
                             return;
                         };
@@ -152,6 +182,8 @@ impl Player {
     /// Starts (or restarts) playback of `buffer` from the beginning.
     ///
     /// The buffer is resampled to the output device rate when needed.
+    /// Replaces any streaming preview source (the sources are mutually
+    /// exclusive).
     ///
     /// # Errors
     /// [`AudioError::Stream`] when the transport is unavailable.
@@ -175,8 +207,52 @@ impl Player {
             .lock()
             .map_err(|_| AudioError::Stream("player state poisoned".into()))?;
         state.buffer = Some(ready);
+        state.fifo = None;
         state.position = 0;
         state.transport = Transport::Playing;
+        Ok(())
+    }
+
+    /// Starts (or resumes) playback from the streaming preview FIFO
+    /// (Phase 6). The playback cursor is the FIFO's own read position, so
+    /// this doubles as resume-after-pause for the streaming source.
+    ///
+    /// The session rate must equal the output device rate — the streaming
+    /// path carries no resampler (disclosed in [`crate::preview`]). The
+    /// caller enforces this and falls back to the buffered path otherwise.
+    ///
+    /// # Errors
+    /// [`AudioError::UnsupportedConfig`] when the rates mismatch;
+    /// [`AudioError::Stream`] when the transport is unavailable.
+    pub fn play_stream(&mut self, fifo: Arc<StreamFifo>, session_rate: u32) -> Result<()> {
+        if session_rate != self.output_rate {
+            return Err(AudioError::UnsupportedConfig(format!(
+                "streaming preview needs session rate {session_rate} == output rate {}",
+                self.output_rate
+            )));
+        }
+        let mut state = self
+            .shared
+            .lock()
+            .map_err(|_| AudioError::Stream("player state poisoned".into()))?;
+        state.buffer = None;
+        state.fifo = Some(fifo);
+        state.position = 0;
+        state.transport = Transport::Playing;
+        Ok(())
+    }
+
+    /// Detaches the streaming preview source (the cursor freezes; a later
+    /// [`Player::play_stream`] resumes from it).
+    pub fn detach_stream(&self) -> Result<()> {
+        let mut state = self
+            .shared
+            .lock()
+            .map_err(|_| AudioError::Stream("player state poisoned".into()))?;
+        state.fifo = None;
+        if state.transport == Transport::Playing {
+            state.transport = Transport::Paused;
+        }
         Ok(())
     }
 
@@ -232,13 +308,18 @@ impl Player {
             .unwrap_or(Transport::Stopped)
     }
 
-    /// Playback position in seconds.
+    /// Playback position in seconds (the FIFO read cursor for the
+    /// streaming source, the buffer cursor otherwise).
     pub fn position_secs(&self) -> f64 {
         self.shared
             .lock()
             .map(|s| {
                 let rate = f64::from(self.output_rate);
-                s.position as f64 / rate
+                if let Some(fifo) = s.fifo.as_ref() {
+                    fifo.read_frame() as f64 / rate
+                } else {
+                    s.position as f64 / rate
+                }
             })
             .unwrap_or(0.0)
     }

@@ -5,7 +5,12 @@
 //! - [`buffer`] — the shared interleaved `f32` [`AudioBuffer`] type.
 //! - [`capture`] — microphone recording via `cpal`, requesting 192 kHz /
 //!   32-bit float and honestly reporting what the device actually granted.
-//! - [`player`] — play/pause/stop playback via `cpal`.
+//! - [`player`] — play/pause/stop playback via `cpal` (static buffers or
+//!   the streaming preview FIFO).
+//! - [`preview`] — Phase 6 streaming preview: a worker renders the engine
+//!   chain in chunks into a bounded FIFO; slider changes restart the chain
+//!   at the playhead and crossfade-splice, so parameter changes are
+//!   audible within ~one FIFO depth instead of a whole-file render.
 //! - [`wav`] — lossless WAV import/export via `hound` (f32/i16/i24, up to
 //!   192 kHz).
 //! - [`mp3`] — MP3 import via `symphonia`, MP3 export via LAME
@@ -23,6 +28,7 @@ pub mod engine;
 pub mod error;
 pub mod mp3;
 pub mod player;
+pub mod preview;
 pub mod resample;
 pub mod wav;
 
@@ -32,4 +38,5 @@ pub use devices::{DeviceInfo, list_input_devices};
 pub use error::{AudioError, Result};
 pub use mp3::{DEFAULT_MP3_BITRATE, MP3_BITRATES, MP3_SAMPLE_RATES, export_mp3, import_mp3};
 pub use player::{Player, Transport};
+pub use preview::{PreviewStats, PreviewStream, StreamFifo};
 pub use wav::{WavBitDepth, export_wav, import_wav};
