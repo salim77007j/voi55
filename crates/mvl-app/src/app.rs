@@ -1035,9 +1035,16 @@ impl App {
         let mut t = (start / step).ceil() * step;
         while t <= end + 1e-12 {
             let frac = ((t - start) / span).clamp(0.0, 1.0) as f32;
+            // Sub-millisecond steps need µs-precision labels or
+            // consecutive ticks collide on the same rounded string.
+            let label = if step < 0.001 {
+                format!("{t:.4} s")
+            } else {
+                fmt_time(t)
+            };
             model.push(RulerTick {
                 frac,
-                label: fmt_time(t).into(),
+                label: label.into(),
             });
             t += step;
         }
@@ -2012,8 +2019,8 @@ fn render_spectrum(
 /// Band magnitude = max bin in the band (spectral peaks, like an RTA).
 /// Pure and unit-tested; `poll_spectrum` drives it from the live tap.
 mod spectrum {
-    use rustfft::num_complex::Complex;
     use rustfft::FftPlanner;
+    use rustfft::num_complex::Complex;
     use std::f32::consts::TAU;
 
     pub const WINDOW: usize = 2048;

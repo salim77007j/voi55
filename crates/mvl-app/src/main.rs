@@ -121,6 +121,10 @@ fn screenshot_mode(args: &[String]) -> Result<(), String> {
             // Same property the export button toggles (no-fake-UI).
             app.window().set_export_open(true);
         }
+        if parsed.about {
+            // Same property the Help menu entry sets.
+            app.window().set_about_open(true);
+        }
         if parsed.devices {
             // Same property the devices button toggles, plus the real
             // enumeration the open handler runs (no-fake-UI).

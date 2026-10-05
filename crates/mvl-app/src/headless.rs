@@ -87,6 +87,9 @@ pub struct ScreenshotArgs {
     /// `--devices` — open the devices dialog (the same property the
     /// devices button toggles; real enumeration runs first).
     pub devices: bool,
+    /// `--about` — open the About dialog (the same property the Help
+    /// menu opens).
+    pub about: bool,
 }
 
 /// Parses `--screenshot --out PATH [flags]`.
@@ -111,6 +114,7 @@ pub fn parse_args(args: &[String]) -> Result<ScreenshotArgs, String> {
     let mut lang = Lang::En;
     let mut export_panel = false;
     let mut devices = false;
+    let mut about = false;
     let mut it = args.iter().map(String::as_str);
     while let Some(a) = it.next() {
         match a {
@@ -118,6 +122,7 @@ pub fn parse_args(args: &[String]) -> Result<ScreenshotArgs, String> {
             "--preview" => preview = true,
             "--export-panel" => export_panel = true,
             "--devices" => devices = true,
+            "--about" => about = true,
             "--lang" => {
                 lang = it
                     .next()
@@ -192,6 +197,7 @@ pub fn parse_args(args: &[String]) -> Result<ScreenshotArgs, String> {
         lang,
         export_panel,
         devices,
+        about,
     })
 }
 

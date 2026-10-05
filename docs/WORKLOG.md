@@ -421,3 +421,18 @@ style — analyzed, becomes the 7.2 visual target).
   the unit tests and will show live bars on real hardware in 7.3).
 - Tests at HEAD: 121 app+audio green (57 audio, 18 app lib, 2 shot,
   ...), fmt + clippy `-D`-clean (0 warnings).
+
+## 2026-10-05 — Phase 7.2f+g: RTL/angle fixes, evidence matrix, phase report
+
+- Knob sweep corrected to industry standard (min 7:30 → max 4:30, 270°
+  clockwise from 12; sin/cos screen mapping fixed — was rotated 90°).
+- Ruler labels at sub-ms steps now µs-precision ("0.0123 s") — ms-rounded
+  labels collided at 100 µs steps.
+- Headless `--about` flag added (About dialog evidence; same property the
+  Help menu sets).
+- Evidence matrix: 17 screenshots in docs/evidence/phase7/ covering EN/AR
+  × empty/demo/params/zoom-subms/preview/devices/export/about.
+- docs/PHASE_7_2_REPORT.md: reference analysis, sub-item log, No-Fake-UI
+  audit, 6 honest deviations, gaps → 7.3/7.4, verdict.
+- Final state: 131 tests green (56 core + 57 audio + 16 app + 2 shot),
+  fmt + clippy clean, all sub-item commits pushed.

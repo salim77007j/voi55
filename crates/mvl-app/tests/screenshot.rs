@@ -51,6 +51,7 @@ fn headless_ui_renders_and_drives_the_engine() {
         lang: Lang::En,
         export_panel: false,
         devices: false,
+        about: false,
     };
     headless::render_to_png(&shell_args, |_app| Ok(())).expect("shell render");
     let buf = decode(&shell_args.out);
@@ -88,6 +89,7 @@ fn headless_ui_renders_and_drives_the_engine() {
         lang: Lang::En,
         export_panel: false,
         devices: false,
+        about: false,
     };
     let mut params_out = None;
     headless::render_to_png(&slider_args, |app| {
@@ -153,6 +155,7 @@ fn headless_ui_renders_and_drives_the_engine() {
         lang: Lang::En,
         export_panel: false,
         devices: false,
+        about: false,
     };
     // SAFETY: the only env readers in this binary run inside the
     // render_to_png closures below, all on this thread.
@@ -199,6 +202,7 @@ fn headless_ui_renders_and_drives_the_engine() {
         lang: Lang::Ar,
         export_panel: false,
         devices: false,
+        about: false,
     };
     let mut ar_status = None;
     headless::render_to_png(&ar_args, |app| {

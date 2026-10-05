@@ -35,14 +35,17 @@ component Knob inherits Rectangle {
     property <length> cx: self.width / 2;
     property <length> cy: self.height / 2;
     property <float> ring-r: 34.0;          // LED ring radius (px units)
-    property <float> value-deg: -225.0 + root.frac.clamp(0.0, 1.0) * 270.0;
+    // Screen angle clockwise from 12 o'clock: min at 7:30 (-135°),
+    // max at 4:30 (+135°), 270° sweep. x = cx + r·sin(θ), y = cy −
+    // r·cos(θ) places the positions correctly with y growing down.
+    property <float> value-deg: -135.0 + root.frac.clamp(0.0, 1.0) * 270.0;
 
     // LED ring: 21 dots over the sweep (lit up to the value).
     for i in 21: Rectangle {
-        property <float> deg: -225.0 + i * 13.5;
-        property <angle> rad: (deg - 90.0) * 1deg;
-        x: parent.cx + Math.cos(rad) * root.ring-r * 1px - self.width / 2;
-        y: parent.cy + Math.sin(rad) * root.ring-r * 1px - self.height / 2;
+        property <float> deg: -135.0 + i * 13.5;
+        property <angle> a: deg * 1deg;
+        x: parent.cx + Math.sin(a) * root.ring-r * 1px - self.width / 2;
+        y: parent.cy - Math.cos(a) * root.ring-r * 1px - self.height / 2;
         width: 3px;
         height: 3px;
         border-radius: 1.5px;
@@ -76,9 +79,9 @@ component Knob inherits Rectangle {
 
     // Indicator dot (the pointer).
     Rectangle {
-        property <angle> rad: (root.value-deg - 90.0) * 1deg;
-        x: parent.cx + Math.cos(rad) * 18.0 * 1px - self.width / 2;
-        y: parent.cy + Math.sin(rad) * 18.0 * 1px - self.height / 2;
+        property <angle> a: root.value-deg * 1deg;
+        x: parent.cx + Math.sin(a) * 18.0 * 1px - self.width / 2;
+        y: parent.cy - Math.cos(a) * 18.0 * 1px - self.height / 2;
         width: 5px;
         height: 5px;
         border-radius: 2.5px;
