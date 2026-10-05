@@ -324,3 +324,30 @@ style — analyzed, becomes the 7.2 visual target).
 - NEXT: 7.2 — the professional studio UI redesign against the reference
   image (dense channel-strip panels, RTA spectrum analyzer from real
   FFTs, transport + meters, before/after), awaits "continue".
+
+## 2026-10-05 — Phase 7.2 start: professional UI redesign (reference-driven)
+
+- Environment reset again (fresh container): ALSA dev headers missing →
+  non-root recovery: `apt-get download libasound2-dev` extracted to
+  ~/.local/alsa-dev, local `alsa.pc` in ~/.local/pkgconfig, runtime
+  libasound.so.2 copied over the dangling .so symlink; env helper in
+  ~/.local/voi55-env.sh. Baseline build green at 975bdd2.
+- Mandatory visual analysis of `reference.png` (1280×698, uploaded at
+  repo root): AUDIOPRECISE PRO — medium-dark gray panel chrome with
+  beveled borders, inset near-black displays (waveform/EQ/RTA/comp),
+  dark radial-gradient knobs + mono readouts below, green→yellow
+  vertical meters with dB scales, saturated transport buttons (green
+  play / red record), LCD project-time display, colored track tabs,
+  dense small-caps labeling. This is the Phase 7.2 visual target.
+- Design synthesis (report will disclose): task-book accent/state
+  palette (pitch #00B4D8, air #06FFA5, formant #B388FF, play #4CAF50,
+  record #E53935, warn/rewind #FFC107, well #0A0A0A) + the reference's
+  chrome language (panel borders, inset wells, LCD readouts, meters).
+- Fonts: task book mandates IBM Plex family → downloaded IBM Plex Sans
+  (Latin, 3 weights) + IBM Plex Mono (3 weights, OFL.txt) to
+  assets/fonts; Arabic stays IBM Plex Sans Arabic (already embedded).
+- 7.2 sub-item plan: a) tokens+fonts+waveform palette b) appwindow
+  layout rebuild (menubar/toolbar/3-column/transport/statusbar) c)
+  knob control strips d) real metering (output tap, volume, seek,
+  DSP duty) e) real-FFT spectrum analyzer f) i18n+status metrics+RTL
+  audit g) evidence + PHASE_7_2_REPORT. Commit per sub-item.
