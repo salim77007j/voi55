@@ -316,8 +316,10 @@ pub fn columns(
 
 /// Palette entries used by the rasterizer (straight, non-premultiplied).
 pub struct WaveformColors {
-    /// Peak envelope (D13: accent/pitch).
-    pub peak: [u8; 4],
+    /// Peak envelope at the midline (D13/7.2: wave-low accent).
+    pub peak_low: [u8; 4],
+    /// Peak envelope at the vertical extremes (wave-high).
+    pub peak_high: [u8; 4],
     /// RMS core.
     pub core: [u8; 4],
     /// Voiced-region tint (D13: accent/air).
@@ -328,14 +330,30 @@ pub struct WaveformColors {
     pub center: [u8; 4],
 }
 
-/// Studio Graphite defaults (D13) with alpha channels tuned for overlay.
+/// Studio Console defaults (Phase 7.2, task-book palette): the peak
+/// envelope fades vertically from `wave-low` cyan at the midline to
+/// `wave-high` coral at the extremes; alphas tuned for overlay.
 pub const STUDIO_COLORS: WaveformColors = WaveformColors {
-    peak: [0x5A, 0xA7, 0xFF, 0x64],
-    core: [0xE7, 0xEB, 0xF0, 0xD9],
-    voiced: [0x46, 0xD6, 0xA5, 0x1C],
-    trace: [0x5A, 0xA7, 0xFF, 0xE6],
-    center: [0x2C, 0x34, 0x40, 0xFF],
+    peak_low: [0x00, 0xB4, 0xD8, 0x64],
+    peak_high: [0xFF, 0x6B, 0x6B, 0x64],
+    core: [0xE0, 0xE0, 0xE0, 0xD9],
+    voiced: [0x06, 0xFF, 0xA5, 0x12],
+    trace: [0x00, 0xB4, 0xD8, 0xE6],
+    center: [0x3C, 0x3C, 0x3C, 0xFF],
 };
+
+/// Linear interpolation between two RGBA colors (channel-wise).
+#[inline]
+fn lerp_color(a: &[u8; 4], b: &[u8; 4], t: f32) -> [u8; 4] {
+    let t = t.clamp(0.0, 1.0);
+    let mut out = [0u8; 4];
+    for c in 0..4 {
+        let x = f32::from(a[c]);
+        let y = f32::from(b[c]);
+        out[c] = (x + (y - x) * t).round().clamp(0.0, 255.0) as u8;
+    }
+    out
+}
 
 #[inline]
 fn blend(dst: &mut [u8], color: [u8; 4]) {
@@ -391,18 +409,24 @@ pub fn draw(
         }
     }
 
-    // Peak + core columns.
+    // Peak + core columns. The peak envelope carries the task-book
+    // vertical gradient: cyan at the midline → coral at the extremes.
     for (x, c) in columns.iter().enumerate().take(w) {
         let top = ((1.0 - c.max.clamp(-1.0, 1.0)) * mid as f32) as usize;
         let bot = ((1.0 - c.min.clamp(-1.0, 1.0)) * mid as f32) as usize;
-        rect(
-            &mut buf,
-            w,
-            x,
-            top.min(bot),
-            bot.max(top).max(top + 1),
-            colors.peak,
-        );
+        let y0 = top.min(bot);
+        let y1 = bot.max(top).max(top + 1);
+        for y in y0..y1.min(buf.len() / (4 * w)) {
+            let t = (mid.abs_diff(y) as f32 / mid.max(1) as f32).min(1.0);
+            rect(
+                &mut buf,
+                w,
+                x,
+                y,
+                y + 1,
+                lerp_color(&colors.peak_low, &colors.peak_high, t),
+            );
+        }
         if c.rms > 0.0 {
             let r = (c.rms * mid as f32).max(1.0) as usize;
             rect(

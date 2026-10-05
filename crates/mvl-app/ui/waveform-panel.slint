@@ -11,8 +11,8 @@ import { Tokens } from "tokens.slint";
 import { Icons, IconButton, ChipButton } from "icons.slint";
 
 export component WaveformPanel inherits Rectangle {
-    background: Tokens.bg-surface;
-    border-radius: Tokens.radius-md;
+    background: Tokens.bg-well;
+    border-radius: Tokens.radius-sm;
     border-width: 1px;
     border-color: Tokens.border-subtle;
     clip: true;
@@ -56,12 +56,11 @@ export component WaveformPanel inherits Rectangle {
 
     // ── Playhead ─────────────────────────────────────────────────────
     if root.playhead-frac >= 0.0 && root.playhead-frac <= 1.0: Rectangle {
-        x: root.playhead-frac * (parent.width - 2px);
+        x: root.playhead-frac * (parent.width - 1px);
         y: 0;
-        width: 2px;
+        width: 1px;
         height: parent.height;
-        background: Tokens.text-primary;
-        opacity: 0.85;
+        background: Tokens.state-warn;
     }
 
     // ── Interaction surface ──────────────────────────────────────────

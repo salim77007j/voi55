@@ -97,7 +97,7 @@ pub struct StrTable {
 }
 
 pub const EN: StrTable = StrTable {
-    ui_font: "Inter",
+    ui_font: "IBM Plex Sans",
     rtl: false,
     waveform_empty: "No audio loaded — import a WAV / MP3, record, or run with --demo synth",
     pitch: "Pitch",
@@ -288,7 +288,7 @@ mod tests {
         // constant assertions — they are constants on purpose).
         const { assert!(!EN.rtl, "EN must be LTR") };
         const { assert!(AR.rtl, "AR must be RTL") };
-        assert_eq!(EN.ui_font, "Inter");
+        assert_eq!(EN.ui_font, "IBM Plex Sans");
         assert_eq!(AR.ui_font, "IBM Plex Sans Arabic");
         // The chip affords the language it switches to.
         assert_eq!(EN.language_label, "عربي");

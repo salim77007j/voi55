@@ -10,13 +10,14 @@ use mvl_app::headless;
 use mvl_app::i18n::Lang;
 use slint::platform::software_renderer::PremultipliedRgbaColor;
 
-/// Studio Graphite tokens (D13) — duplicated here on purpose: the assert
-/// compares rendered pixels against the *spec*, not against the widget's
-/// own constants.
-const BG_BASE: [u8; 3] = [0x12, 0x15, 0x1A];
-const BG_ELEVATED: [u8; 3] = [0x21, 0x28, 0x31];
-const BG_SURFACE: [u8; 3] = [0x1A, 0x1F, 0x26];
-const ACCENT_PITCH: [u8; 3] = [0x5A, 0xA7, 0xFF];
+/// Studio Console tokens (Phase 7.2) — duplicated here on purpose: the
+/// assert compares rendered pixels against the *spec*, not against the
+/// widget's own constants.
+const BG_BASE: [u8; 3] = [0x1E, 0x1E, 0x1E];
+const BG_ELEVATED: [u8; 3] = [0x2D, 0x2D, 0x2D];
+const BG_SURFACE: [u8; 3] = [0x25, 0x25, 0x26];
+const BG_WELL: [u8; 3] = [0x0A, 0x0A, 0x0A];
+const ACCENT_PITCH: [u8; 3] = [0x00, 0xB4, 0xD8];
 
 fn decode(path: &std::path::Path) -> Vec<u8> {
     let png = std::fs::read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
@@ -59,7 +60,7 @@ fn headless_ui_renders_and_drives_the_engine() {
     };
     assert_eq!(px(8, 300), BG_BASE, "window background must be bg/base");
     assert_eq!(px(400, 795), BG_ELEVATED, "status bar must be bg/elevated");
-    assert_eq!(px(640, 420), BG_SURFACE, "waveform well must be bg/surface");
+    assert_eq!(px(640, 420), BG_WELL, "waveform well must be bg/well");
     // Empty-state hint: scan the whole well band (layout-dependent).
     let mut text_pixels = 0;
     for y in 150..600 {

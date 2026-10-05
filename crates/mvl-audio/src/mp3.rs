@@ -164,9 +164,7 @@ fn append_decoded(
         AudioBufferRef::S16(buf) => {
             push_interleaved(buf, frames, channels, out, |s| f32::from(s) / 32_768.0)?;
         }
-        AudioBufferRef::S24(buf) => {
-            push_interleaved(buf, frames, channels, out, f32::from_sample)?
-        }
+        AudioBufferRef::S24(buf) => push_interleaved(buf, frames, channels, out, f32::from_sample)?,
         AudioBufferRef::S32(buf) => {
             push_interleaved(buf, frames, channels, out, |s| s as f32 / 2_147_483_648.0)?;
         }
@@ -183,9 +181,7 @@ fn append_decoded(
                 (f32::from(s) - 32_768.0) / 32_768.0
             })?;
         }
-        AudioBufferRef::U24(buf) => {
-            push_interleaved(buf, frames, channels, out, f32::from_sample)?
-        }
+        AudioBufferRef::U24(buf) => push_interleaved(buf, frames, channels, out, f32::from_sample)?,
         AudioBufferRef::U32(buf) => {
             push_interleaved(buf, frames, channels, out, |s| {
                 s as f32 / 2_147_483_648.0 - 1.0

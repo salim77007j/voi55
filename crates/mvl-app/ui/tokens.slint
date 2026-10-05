@@ -1,52 +1,83 @@
 // Copyright © salim77007j
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// "Studio Graphite" design tokens — architecture plan D13.
-// One global, imported by every widget: the palette, the 8 pt spacing grid,
-// the radius scale and the motion curve live here so no .slint file ever
-// hardcodes a color or spacing value.
+// "Studio Console" design tokens — Phase 7.2 professional redesign.
+// Visual target: the uploaded DAW reference (dense gray panel chrome,
+// inset near-black displays, saturated accent/transport colors) fused
+// with the task-book palette. One global, imported by every widget: no
+// .slint file ever hardcodes a color, spacing or font.
 
 export global Tokens {
-    // ── Palette (D13) ────────────────────────────────────────────────
-    out property <color> bg-base: #12151A;          // window background
-    out property <color> bg-surface: #1A1F26;       // panels, waveform well
-    out property <color> bg-elevated: #212831;      // toolbar, status chrome
-    out property <color> bg-elevated-hover: #262E38; // hover = +4 % lightness
-    out property <color> bg-scrim: rgba(18, 21, 26, 0.72); // overlay chip on the waveform
-    out property <color> bg-elevated-press: #2B343F; // press = +8 % lightness
-    out property <color> border-subtle: #2C3440;    // 1 px hairlines
-    out property <color> text-primary: #E7EBF0;     // ≥ 12.4:1 on base
-    out property <color> text-muted: #8C97A6;       // ≥ 4.9:1 on base
-    out property <color> accent-pitch: #5AA7FF;     // pitch slider / trace
-    out property <color> accent-air: #46D6A5;       // air slider / trace
-    out property <color> accent-formant: #B78CFF;   // formant slider / trace
-    out property <color> state-record: #FF4D4F;     // record state, clip
-    out property <color> state-play: #3DDC84;       // play state
-    out property <color> state-warn: #FFB020;       // device fallback notices
+    // ── Chrome (panels, borders, text) ──────────────────────────────
+    out property <color> bg-base: #1E1E1E;         // window background
+    out property <color> bg-panel: #252526;        // panels, control strips
+    out property <color> bg-elevated: #2D2D2D;     // menubar/toolbar chrome
+    out property <color> bg-elevated-hover: #333333;
+    out property <color> bg-elevated-press: #3A3A3A;
+    out property <color> border-subtle: #3C3C3C;   // 1 px hairlines
+    out property <color> border-strong: #4A4A4A;   // bevel highlight
+    out property <color> text-primary: #E0E0E0;
+    out property <color> text-muted: #A0A0A0;
+    out property <color> text-faint: #6E6E6E;
 
-    // ── 8 pt spacing grid ────────────────────────────────────────────
+    // ── Inset displays (waveform well, spectrum, LCD) ───────────────
+    out property <color> bg-well: #0A0A0A;         // waveform / spectrum well
+    out property <color> well-grid: #2A2A2A;       // grid hairlines in wells
+    out property <color> bg-lcd: #101418;          // transport time display
+    out property <color> lcd-text: #D6F3FB;        // LCD digits (cyan-tinted)
+    out property <color> bg-scrim: rgba(10, 10, 10, 0.72); // overlay chip
+
+    // ── Engine accents (task-book §UI palette) ──────────────────────
+    out property <color> accent-pitch: #00B4D8;    // pitch / F0 trace
+    out property <color> accent-air: #06FFA5;      // air / voiced tint
+    out property <color> accent-formant: #B388FF;  // formant
+    // Waveform gradient (task book): cyan center → coral extremes.
+    out property <color> wave-low: #00B4D8;
+    out property <color> wave-high: #FF6B6B;
+
+    // ── Transport / state ───────────────────────────────────────────
+    out property <color> state-play: #4CAF50;
+    out property <color> state-play-press: #3B8C40;
+    out property <color> state-record: #E53935;
+    out property <color> state-record-press: #B3302C;
+    out property <color> state-warn: #FFC107;      // rewind / FF / playhead
+
+    // ── VU meter scale ──────────────────────────────────────────────
+    out property <color> vu-green: #55B35C;
+    out property <color> vu-yellow: #FFC107;
+    out property <color> vu-red: #E53935;
+    out property <color> vu-off: #2A2A2A;          // unlit meter segments
+
+    // ── 8 pt spacing grid ───────────────────────────────────────────
+    out property <length> sp-quarter: 2px;
     out property <length> sp-half: 4px;
     out property <length> sp-1: 8px;
     out property <length> sp-2: 16px;
     out property <length> sp-3: 24px;
     out property <length> sp-4: 32px;
 
-    // ── Radius scale ─────────────────────────────────────────────────
-    out property <length> radius-sm: 6px;
-    out property <length> radius-md: 10px;
-    out property <length> radius-lg: 14px;
+    // ── Radius scale ────────────────────────────────────────────────
+    out property <length> radius-sm: 4px;
+    out property <length> radius-md: 8px;
+    out property <length> radius-lg: 12px;
 
     // ── Motion: 120–160 ms, cubic-bezier(0.2, 0.7, 0.3, 1) ──────────
     out property <duration> anim-fast: 120ms;
     out property <duration> anim-normal: 160ms;
     out property <easing> motion: cubic-bezier(0.2, 0.7, 0.3, 1);
 
-    // ── Typography (D12) ─────────────────────────────────────────────
-    // Latin UI face. Arabic UI switches the window's default-font-family
-    // to "IBM Plex Sans Arabic" at runtime (i18n, sub-item 4.5).
-    out property <string> font-latin: "Inter";
+    // ── Typography (task book: IBM Plex family, embedded) ───────────
+    // Latin UI face (D12 spec update: Inter → IBM Plex Sans).
+    out property <string> font-latin: "IBM Plex Sans";
+    // Arabic UI switches the window's default-font-family at runtime.
     out property <string> font-arabic: "IBM Plex Sans Arabic";
+    // Numeric readouts, time displays, dB scales: mono face, LTR digits.
+    out property <string> font-mono: "IBM Plex Mono";
+    // Task-book type scale: title 16 / label 12 / readout 14 / time 24.
+    out property <length> font-size-title: 16px;
     out property <length> font-size-body: 13px;
+    out property <length> font-size-label: 12px;
     out property <length> font-size-small: 11px;
-    out property <length> font-size-value: 15px;
+    out property <length> font-size-readout: 14px;
+    out property <length> font-size-time: 24px;
 }
