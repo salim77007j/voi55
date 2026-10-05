@@ -41,7 +41,7 @@ impl Rng {
 fn seed_buffer(rng: &mut Rng) -> AudioBuffer {
     let rate: [u32; 3] = [44_100, 48_000, 96_000];
     let sr = rate[rng.below(3)];
-    let channels: u16 = if rng.next() % 2 == 0 { 1 } else { 2 };
+    let channels: u16 = if rng.next().is_multiple_of(2) { 1 } else { 2 };
     let secs = 0.2 + (rng.next() % 30) as f32 * 0.01; // 0.20–0.49 s
     let n = (sr as f32 * secs) as usize;
     let f0 = 110.0 + (rng.next() % 40) as f32 * 4.0; // 110–266 Hz
@@ -140,7 +140,7 @@ fn fuzz_1000_files_never_panic() {
         let mp3 = dir.join(format!("seed{i}.mp3"));
         let wav = dir.join(format!("seed{i}.wav"));
         export_mp3(&mp3, &buf, 128 + (rng.next() % 5) as u32 * 32).expect("seed mp3 encode");
-        let depth = if rng.next() % 2 == 0 {
+        let depth = if rng.next().is_multiple_of(2) {
             WavBitDepth::Int16
         } else {
             WavBitDepth::Float32
