@@ -26,6 +26,7 @@ pub mod capture;
 pub mod devices;
 pub mod engine;
 pub mod error;
+pub mod meter;
 pub mod mp3;
 pub mod player;
 pub mod preview;
@@ -39,6 +40,7 @@ pub use devices::{
     resolve_output_device,
 };
 pub use error::{AudioError, Result};
+pub use meter::MeterTap;
 pub use mp3::{DEFAULT_MP3_BITRATE, MP3_BITRATES, MP3_SAMPLE_RATES, export_mp3, import_mp3};
 pub use player::{Player, Transport};
 pub use preview::{PreviewStats, PreviewStream, StreamFifo};

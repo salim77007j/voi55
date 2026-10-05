@@ -14,6 +14,7 @@
 use crate::buffer::AudioBuffer;
 use crate::devices::convertible;
 use crate::error::{AudioError, Result};
+use crate::meter::MeterTap;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{BufferSize, SampleFormat, Stream, StreamConfig};
 use std::sync::{Arc, Mutex};
@@ -132,6 +133,8 @@ pub struct Recorder {
     shared: Arc<Mutex<CaptureState>>,
     stream: Option<Stream>,
     info: CaptureInfo,
+    /// Real-time input level tap (the record meters' data source).
+    meter: Arc<MeterTap>,
 }
 
 impl Recorder {
@@ -190,6 +193,7 @@ impl Recorder {
             recording: true,
             ..CaptureState::default()
         }));
+        let meter = MeterTap::new();
 
         // Per-stream sample ceiling for the negotiated rate (the hard
         // MAX_HARD_SAMPLES remains the ultimate bound for fast devices).
@@ -198,21 +202,41 @@ impl Recorder {
         let cap = negotiated_cap.min(MAX_HARD_SAMPLES);
 
         let stream: Stream = match plan.format {
-            SampleFormat::F32 => {
-                build_stream::<f32>(device, &stream_config, Arc::clone(&shared), cap)?
-            }
-            SampleFormat::I16 => {
-                build_stream::<i16>(device, &stream_config, Arc::clone(&shared), cap)?
-            }
-            SampleFormat::I32 => {
-                build_stream::<i32>(device, &stream_config, Arc::clone(&shared), cap)?
-            }
-            SampleFormat::I8 => {
-                build_stream::<i8>(device, &stream_config, Arc::clone(&shared), cap)?
-            }
-            SampleFormat::U8 => {
-                build_stream::<u8>(device, &stream_config, Arc::clone(&shared), cap)?
-            }
+            SampleFormat::F32 => build_stream::<f32>(
+                device,
+                &stream_config,
+                Arc::clone(&shared),
+                cap,
+                Arc::clone(&meter),
+            )?,
+            SampleFormat::I16 => build_stream::<i16>(
+                device,
+                &stream_config,
+                Arc::clone(&shared),
+                cap,
+                Arc::clone(&meter),
+            )?,
+            SampleFormat::I32 => build_stream::<i32>(
+                device,
+                &stream_config,
+                Arc::clone(&shared),
+                cap,
+                Arc::clone(&meter),
+            )?,
+            SampleFormat::I8 => build_stream::<i8>(
+                device,
+                &stream_config,
+                Arc::clone(&shared),
+                cap,
+                Arc::clone(&meter),
+            )?,
+            SampleFormat::U8 => build_stream::<u8>(
+                device,
+                &stream_config,
+                Arc::clone(&shared),
+                cap,
+                Arc::clone(&meter),
+            )?,
             other => {
                 return Err(AudioError::UnsupportedConfig(format!(
                     "no f32 conversion for device format {other:?}"
@@ -235,7 +259,14 @@ impl Recorder {
             shared,
             stream: Some(stream),
             info,
+            meter,
         })
+    }
+
+    /// The real-time input level tap. Drained by the UI while a capture
+    /// is armed — the meters then show the true incoming signal.
+    pub fn meter(&self) -> Arc<MeterTap> {
+        Arc::clone(&self.meter)
     }
 
     /// Format details of this capture (requested vs negotiated).
@@ -324,15 +355,20 @@ fn build_stream<T>(
     config: &StreamConfig,
     shared: Arc<Mutex<CaptureState>>,
     capacity_samples: usize,
+    meter: Arc<MeterTap>,
 ) -> Result<Stream>
 where
     T: cpal::SizedSample + ToF32 + Send + 'static,
 {
     let err_shared = Arc::clone(&shared);
+    let in_channels = usize::from(config.channels.max(1));
     device
         .build_input_stream(
             *config,
             move |data: &[T], _: &cpal::InputCallbackInfo| {
+                // Publish the true incoming level first (even when the
+                // ring overflows below, the meter shows what arrived).
+                meter.push_converted(data, in_channels, ToF32::to_f32);
                 let Ok(mut state) = shared.lock() else {
                     return; // poisoned: nothing safe to do in the RT thread
                 };

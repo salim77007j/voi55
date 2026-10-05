@@ -114,6 +114,15 @@ pub struct App {
     /// Master output volume 0..=1.5 (1.0 unity). Applied to the real
     /// output callback; persisted across player reconnects.
     volume: Cell<f32>,
+    /// Meter smoothing state (decay + peak hold), UI-thread only.
+    meter_l: Cell<f32>,
+    meter_r: Cell<f32>,
+    peak_l: Cell<f32>,
+    peak_r: Cell<f32>,
+    peak_hold_l: Cell<u32>,
+    peak_hold_r: Cell<u32>,
+    /// Status-bar resource refresh throttle (RSS read ~1 Hz).
+    slow_poll: Cell<u32>,
 }
 
 impl App {
@@ -150,6 +159,13 @@ impl App {
             selected_output: RefCell::new(None),
             selection: RefCell::new(None),
             volume: Cell::new(1.0),
+            meter_l: Cell::new(0.0),
+            meter_r: Cell::new(0.0),
+            peak_l: Cell::new(0.0),
+            peak_r: Cell::new(0.0),
+            peak_hold_l: Cell::new(0),
+            peak_hold_r: Cell::new(0),
+            slow_poll: Cell::new(0),
         });
         *app.self_weak.borrow_mut() = Rc::downgrade(&app);
 
@@ -1620,6 +1636,65 @@ impl App {
         self.sync_time_display(pos);
         if transport == mvl_audio::Transport::Playing {
             self.set_playhead(pos);
+        }
+        self.poll_meters();
+    }
+
+    /// Drains the real level tap (record input while armed, output
+    /// otherwise), applies meter ballistics (fast fall, 2 s peak hold,
+    /// slow peak decay) and refreshes the resource segment at ~1 Hz.
+    /// The values shown are the audio threads' own measurements — the
+    /// tap is drained exactly once per tick (drain clears the level
+    /// cells; the duty figure is a load-only EMA read).
+    fn poll_meters(&self) {
+        let source = self
+            .recorder
+            .borrow()
+            .as_ref()
+            .map(|rec| rec.meter().drain())
+            .or_else(|| {
+                self.player
+                    .borrow()
+                    .as_ref()
+                    .map(|p| p.meter().drain())
+            })
+            .unwrap_or((0.0, 0.0, 0));
+        let (raw_l, raw_r, duty_ppm) = source;
+        // Ballistics per channel: level falls 20 %/tick toward the new
+        // peak; the peak-hold marker waits ~2 s (50 ticks) then decays.
+        let smooth = |raw: f32, level: &Cell<f32>, peak: &Cell<f32>, hold: &Cell<u32>| {
+            let target = raw.max(level.get() * 0.80);
+            level.set(target);
+            if target >= peak.get() {
+                peak.set(target);
+                hold.set(50);
+            } else if hold.get() > 0 {
+                hold.set(hold.get() - 1);
+            } else {
+                peak.set(peak.get() * 0.97);
+            }
+        };
+        smooth(raw_l, &self.meter_l, &self.peak_l, &self.peak_hold_l);
+        smooth(raw_r, &self.meter_r, &self.peak_r, &self.peak_hold_r);
+        self.window.set_meter_l(self.meter_l.get());
+        self.window.set_meter_r(self.meter_r.get());
+        self.window.set_peak_l(self.peak_l.get());
+        self.window.set_peak_r(self.peak_r.get());
+
+        // Resource segment at ~1 Hz (25 × 40 ms). Engineering fragments
+        // (MB / %) stay Latin in both languages; duty ppm → % via /10⁴.
+        let tick = (self.slow_poll.get() + 1) % 25;
+        self.slow_poll.set(tick);
+        if tick == 0 {
+            let duty_pct = f64::from(duty_ppm) / 10_000.0;
+            let resources = match crate::sysmetrics::resident_bytes() {
+                Some(bytes) => self.num(format!(
+                    "RSS {} MB \u{b7} DSP {duty_pct:.1} %",
+                    bytes / (1024 * 1024)
+                )),
+                None => self.num(format!("DSP {duty_pct:.1} %")),
+            };
+            self.window.set_seg_resources(resources.into());
         }
     }
 

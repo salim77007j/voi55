@@ -2822,12 +2822,14 @@ checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 name = "mvl-app"
 version = "1.0.0-rc.1"
 dependencies = [
+ "libc",
  "mvl-audio",
  "mvl-core",
  "png",
  "rfd",
  "slint",
  "slint-build",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

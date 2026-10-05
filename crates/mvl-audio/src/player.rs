@@ -22,6 +22,7 @@
 
 use crate::buffer::AudioBuffer;
 use crate::error::{AudioError, Result};
+use crate::meter::MeterTap;
 use crate::preview::StreamFifo;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
@@ -59,6 +60,8 @@ pub struct Player {
     /// callback after the channel mapping, before the device conversion.
     /// Shared with the callback so the UI thread can move it live.
     volume: Arc<AtomicU32>,
+    /// Real-time level/duty tap (the transport meters' data source).
+    meter: Arc<MeterTap>,
 }
 
 impl Player {
@@ -127,6 +130,7 @@ impl Player {
         }));
 
         let volume = Arc::new(AtomicU32::new(1.0f32.to_bits()));
+        let meter = MeterTap::new();
 
         let stream = {
             let stream_config = supported.config();
@@ -138,6 +142,7 @@ impl Player {
                     Arc::clone(&shared),
                     output_channels,
                     Arc::clone(&volume),
+                    Arc::clone(&meter),
                 )?,
                 SampleFormat::I32 => build_output_stream::<i32>(
                     device,
@@ -146,6 +151,7 @@ impl Player {
                     Arc::clone(&shared),
                     output_channels,
                     Arc::clone(&volume),
+                    Arc::clone(&meter),
                 )?,
                 SampleFormat::I16 => build_output_stream::<i16>(
                     device,
@@ -154,6 +160,7 @@ impl Player {
                     Arc::clone(&shared),
                     output_channels,
                     Arc::clone(&volume),
+                    Arc::clone(&meter),
                 )?,
                 SampleFormat::I8 => build_output_stream::<i8>(
                     device,
@@ -162,6 +169,7 @@ impl Player {
                     Arc::clone(&shared),
                     output_channels,
                     Arc::clone(&volume),
+                    Arc::clone(&meter),
                 )?,
                 SampleFormat::U8 => build_output_stream::<u8>(
                     device,
@@ -170,6 +178,7 @@ impl Player {
                     Arc::clone(&shared),
                     output_channels,
                     Arc::clone(&volume),
+                    Arc::clone(&meter),
                 )?,
                 other => {
                     return Err(AudioError::UnsupportedConfig(format!(
@@ -188,7 +197,15 @@ impl Player {
             output_rate,
             output_channels,
             volume,
+            meter,
         })
+    }
+
+    /// The real-time level tap (L/R peaks + callback duty). The UI
+    /// drains it on its poll tick — the meters show the true post-gain
+    /// signal, never a simulation.
+    pub fn meter(&self) -> Arc<MeterTap> {
+        Arc::clone(&self.meter)
     }
 
     /// Output configuration actually granted by the device.
@@ -444,15 +461,18 @@ fn build_output_stream<T>(
     error_shared: Arc<Mutex<PlayState>>,
     out_channels: u16,
     volume: Arc<AtomicU32>,
+    meter: Arc<MeterTap>,
 ) -> Result<Stream>
 where
     T: cpal::SizedSample + FromF32 + Send + 'static,
 {
     let mut scratch: Vec<f32> = Vec::new();
+    let out_rate = config.sample_rate.max(1);
     device
         .build_output_stream(
             *config,
             move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
+                let cb_start = std::time::Instant::now();
                 let ch = usize::from(out_channels.max(1));
                 let out_frames = data.len() / ch;
 
@@ -503,6 +523,12 @@ where
                 if vol != 1.0 {
                     apply_volume(&mut scratch, vol);
                 }
+
+                // Publish the true post-gain levels + callback duty for
+                // the UI meters (lock-free, see meter.rs).
+                meter.push_interleaved(&scratch, ch);
+                let budget = out_frames as f64 / f64::from(out_rate);
+                meter.push_duty(cb_start.elapsed().as_secs_f64(), budget);
 
                 // Convert into the device's sample domain (clamped).
                 for (dst, src) in data.iter_mut().zip(scratch.iter()) {

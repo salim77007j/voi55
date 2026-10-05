@@ -14,6 +14,7 @@ pub mod dialogs;
 pub mod headless;
 pub mod i18n;
 pub mod session;
+pub mod sysmetrics;
 pub mod waveform;
 
 mod generated {
