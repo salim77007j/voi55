@@ -2829,7 +2829,7 @@ checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 
 [[package]]
 name = "mvl-app"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "libc",
  "mach2 0.4.3",
@@ -2845,7 +2845,7 @@ dependencies = [
 
 [[package]]
 name = "mvl-audio"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "cpal",
  "hound",
@@ -2858,7 +2858,7 @@ dependencies = [
 
 [[package]]
 name = "mvl-core"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "hound",
  "realfft",

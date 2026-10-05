@@ -1,0 +1,23 @@
+phase74 soak SEGMENT 1 start 2026-10-05T14:00:47+00:00, duration 9 min, lang en
+2026-10-05T14:00:50+00:00 started Xvfb(14356) app(14360)
+2026-10-05T14:09:47+00:00 stress loop finished after 77 runs
+2026-10-05T14:09:50+00:00 soak completed: 18 samples, 18 alive
+phase74 soak SEGMENT 2 start 2026-10-05T14:09:55+00:00, duration 9 min, lang en
+2026-10-05T14:09:58+00:00 started Xvfb(14832) app(14836)
+2026-10-05T14:18:56+00:00 stress loop finished after 77 runs
+2026-10-05T14:18:58+00:00 soak completed: 36 samples, 36 alive
+phase74 soak SEGMENT 3 start 2026-10-05T14:19:01+00:00, duration 9 min, lang ar
+2026-10-05T14:19:04+00:00 started Xvfb(15308) app(15312)
+2026-10-05T14:28:01+00:00 stress loop finished after 77 runs
+2026-10-05T14:28:04+00:00 soak completed: 54 samples, 54 alive
+phase74 soak SEGMENT 4 start 2026-10-05T14:28:08+00:00, duration 9 min, lang en
+2026-10-05T14:28:11+00:00 started Xvfb(15785) app(15789)
+2026-10-05T14:37:09+00:00 stress loop finished after 77 runs
+2026-10-05T14:37:12+00:00 soak completed: 72 samples, 72 alive
+phase74 soak SEGMENT 5 start 2026-10-05T14:37:18+00:00, duration 9 min, lang ar
+2026-10-05T14:37:21+00:00 started Xvfb(16260) app(16264)
+2026-10-05T14:46:18+00:00 stress loop finished after 77 runs
+2026-10-05T14:46:22+00:00 soak completed: 90 samples, 90 alive
+phase74 soak SEGMENT 6 start 2026-10-05T14:46:27+00:00, duration 9 min, lang en
+2026-10-05T14:46:30+00:00 started Xvfb(16735) app(16739)
+2026-10-05T14:55:30+00:00 soak completed: 108 samples, 108 alive

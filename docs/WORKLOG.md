@@ -464,3 +464,24 @@ style — analyzed, becomes the 7.2 visual target).
   playback, mic capture, loopback latency, Gatekeeper flow = human tasks
   (VALIDATION_REPORT §3 stands); Wine font/clip quirks disclosed as proxy
   artifacts. Report: docs/PHASE_7_3_REPORT.md.
+
+## 2026-10-05 — Phase 7.4: quality gates + v1.0.0
+
+- De-rc: workspace version 1.0.0-rc.1 -> 1.0.0.
+- Fuzzer upgrade (the phase's one real code change): the 64-blob unit
+  slice was VACUOUS (telemetry 0/1000 pure-random blobs reached a
+  decoder). New crates/mvl-audio/tests/fuzz_1000.rs = seeded-mutation
+  fuzzing (40 exporter-produced seeds, 1000 mutants; 330/1000 reached
+  the decoders; >10% reached-assertion; runs in CI permanently).
+- Runtime gates re-run at 1.0.0: cold start 62 ms median, RAM 149/198 MB
+  (documented screenshot protocol), binary < 50 MB -> PASSED.
+- Soak: 6 x 9.5-min segments (~57 min; sandbox reaps detached daemons ->
+  segmented, disclosed), 108/108 alive, 0 crashes/panics, ~460 stress
+  renders, 0 failures; AR segments exercise RTL. Evidence:
+  docs/evidence/phase7/soak/.
+- RAM audit: first long-lived-GUI measurement 252 MB steady, flat (no
+  leak); smaps anatomy = 99 MB session + ~50 MB libLLVM/llvmpipe
+  (sandbox software-GL) + 39 MB heap -> app-attributable ~150 MB.
+  malloc_trim experiment tried and reverted (no effect).
+- docs/PHASE_7_REPORT.md written (before/after, 10-gate scorecard, open
+  human items, verdict). Tag v1.0.0 follows this commit.
