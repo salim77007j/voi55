@@ -27,6 +27,9 @@ rustfft = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
+# Maintained Mach shims: libc deprecated its mach_task_self binding and
+# points here (CI clippy -D warnings fails on the deprecation).
+mach2 = "0.4"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = [

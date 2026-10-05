@@ -4,7 +4,8 @@
 //! (RSS) only. Per-platform:
 //! - Linux: `/proc/self/statm` (std-only, no unsafe). Pages are 4 KiB on
 //!   every desktop target Rust ships (x86_64/aarch64); disclosed.
-//! - macOS: `task_info(MACH_TASK_BASIC_INFO)` via libc — small FFI
+//! - macOS: `task_info(MACH_TASK_BASIC_INFO)` via libc + `mach2` (the
+//!   maintained Mach shim libc's deprecation note points to) — small FFI
 //!   confined to this module.
 //! - Windows: `GetProcessMemoryInfo` via `windows-sys` (same confinement).
 //!
@@ -58,7 +59,8 @@ fn macos_rss() -> Option<u64> {
         suspend_count: i32,
     }
     unsafe {
-        let task = libc::mach_task_self();
+        // mach2 replaces libc's deprecated mach_task_self binding.
+        let task = mach2::traps::mach_task_self();
         let mut info: MachTaskBasicInfo = zeroed();
         let mut count = (size_of::<MachTaskBasicInfo>() / size_of::<u32>()) as u32;
         // MACH_TASK_BASIC_INFO == 20; KERN_SUCCESS == 0.
