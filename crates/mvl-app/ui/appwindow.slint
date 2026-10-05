@@ -24,6 +24,7 @@ import { MenuBar } from "menu-bar.slint";
 import { Toolbar } from "toolbar.slint";
 import { InfoStrip } from "info-strip.slint";
 import { StatusBar } from "status-bar.slint";
+import { SpectrumPanel } from "spectrum-panel.slint";
 
 import "../../../assets/fonts/IBMPlexSans-Regular.ttf";
 import "../../../assets/fonts/IBMPlexSans-Medium.ttf";
@@ -176,6 +177,11 @@ export component AppWindow inherits Window {
     in property <string> t-cap-channels;
     in property <string> t-cap-f0;
     in property <string> t-cap-voiced;
+    // Spectrum analyzer (real FFT of the output tap).
+    in property <string> t-spectrum;
+    in property <image> spectrum-image;
+    out property <length> spec-width <=> spec.view-width;
+    out property <length> spec-height <=> spec.view-height;
     in property <string> info-name;
     in property <string> info-rate;
     in property <string> info-domain;
@@ -383,10 +389,10 @@ export component AppWindow inherits Window {
                             changed(v) => { root.formant-changed(v); }
                         }
 
-                        spec-slot := Rectangle {
-                            // 7.2e mounts the real-FFT spectrum analyzer
-                            // here; until then the column keeps its
-                            // rhythm without a decorative stand-in.
+                        spec := SpectrumPanel {
+                            t-title: root.t-spectrum;
+                            spectrum-image: root.spectrum-image;
+                            active: root.playing;
                         }
                     }
                 }

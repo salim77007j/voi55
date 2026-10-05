@@ -2827,6 +2827,7 @@ dependencies = [
  "mvl-core",
  "png",
  "rfd",
+ "rustfft",
  "slint",
  "slint-build",
  "windows-sys 0.59.0",

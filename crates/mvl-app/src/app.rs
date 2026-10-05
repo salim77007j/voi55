@@ -35,6 +35,8 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use rustfft::FftPlanner;
+
 /// One completed preview render (A/B view source). `Send` by construction
 /// (plain data), so a background thread can produce it.
 struct PreviewRender {
@@ -123,6 +125,8 @@ pub struct App {
     peak_hold_r: Cell<u32>,
     /// Status-bar resource refresh throttle (RSS read ~1 Hz).
     slow_poll: Cell<u32>,
+    /// Spectrum analyzer state (7.2e), UI-thread only.
+    spectrum: RefCell<SpectrumState>,
 }
 
 impl App {
@@ -166,6 +170,7 @@ impl App {
             peak_hold_l: Cell::new(0),
             peak_hold_r: Cell::new(0),
             slow_poll: Cell::new(0),
+            spectrum: RefCell::new(SpectrumState::new()),
         });
         *app.self_weak.borrow_mut() = Rc::downgrade(&app);
 
@@ -501,6 +506,7 @@ impl App {
         self.window.set_t_cap_channels(t.cap_channels.into());
         self.window.set_t_cap_f0(t.cap_f0.into());
         self.window.set_t_cap_voiced(t.cap_voiced.into());
+        self.window.set_t_spectrum(t.spectrum.into());
         self.recompose_base_status();
         self.compose_status(None);
         self.refresh();
@@ -1652,12 +1658,7 @@ impl App {
             .borrow()
             .as_ref()
             .map(|rec| rec.meter().drain())
-            .or_else(|| {
-                self.player
-                    .borrow()
-                    .as_ref()
-                    .map(|p| p.meter().drain())
-            })
+            .or_else(|| self.player.borrow().as_ref().map(|p| p.meter().drain()))
             .unwrap_or((0.0, 0.0, 0));
         let (raw_l, raw_r, duty_ppm) = source;
         // Ballistics per channel: level falls 20 %/tick toward the new
@@ -1696,6 +1697,63 @@ impl App {
             };
             self.window.set_seg_resources(resources.into());
         }
+        self.poll_spectrum();
+    }
+
+    /// Spectrum analyzer tick (7.2e): drains the output tap's newest
+    /// window, FFTs it (Hann + forward), maps to 48 log-frequency bands
+    /// (40 Hz–16 kHz), applies the peak-hold/decay ballistics and
+    /// renders the frame the panel displays. Decays toward silence when
+    /// playback stops (real signal → real decay, no frozen fake frame).
+    fn poll_spectrum(&self) {
+        let playing = self.window.get_playing();
+        let mut st = self.spectrum.borrow_mut();
+        let rate = {
+            let guard = self.player.borrow();
+            guard.as_ref().map_or(48_000, |p| p.output_format().0)
+        };
+
+        // 1. Gather magnitudes (0..1 per band) from the raw window.
+        let mut mags = [0.0f32; SPEC_BANDS];
+        if playing {
+            let mut window = vec![0.0f32; SPEC_WINDOW];
+            let has_audio = {
+                let guard = self.player.borrow();
+                match guard.as_ref() {
+                    Some(p) => p.spectrum().drain_window(&mut window),
+                    None => false,
+                }
+            };
+            if has_audio {
+                let hann = st.hann.clone();
+                mags = spectrum::band_magnitudes(&window, rate, &hann, &mut st.planner);
+            }
+        }
+
+        // 2. dB-mapped bars + peak hold/decay (ballistics regardless of
+        //    playback state: the display decays honestly to silence).
+        for (b, mag) in mags.iter().enumerate() {
+            let db = 20.0 * mag.max(1e-9).log10();
+            let norm = ((db - SPEC_DB_FLOOR) / -SPEC_DB_FLOOR).clamp(0.0, 1.0);
+            let target = norm.max(st.bars[b] * 0.82);
+            st.bars[b] = target;
+            if target >= st.peaks[b] {
+                st.peaks[b] = target;
+            } else {
+                st.peaks[b] = (st.peaks[b] * 0.985).max(target);
+            }
+        }
+
+        // 3. Render at the panel's physical pixel size.
+        let scale = f64::from(self.window.window().scale_factor());
+        let w = (f64::from(self.window.get_spec_width()) * scale)
+            .round()
+            .max(1.0) as u32;
+        let h = (f64::from(self.window.get_spec_height()) * scale)
+            .round()
+            .max(1.0) as u32;
+        let image = Image::from_rgba8(render_spectrum(&st.bars, &st.peaks, w, h));
+        self.window.set_spectrum_image(image);
     }
 
     /// Pushes the split LCD readout (current / total, mono digits, LTR
@@ -1871,6 +1929,139 @@ impl App {
     }
 }
 
+/// Analyzer state (Phase 7.2e): the FFT window, the per-band peak
+/// holds and the latest rendered frame. UI-thread only (the raw signal
+/// crosses threads through `mvl_audio::SpectrumTap`).
+use spectrum::{BANDS as SPEC_BANDS, WINDOW as SPEC_WINDOW};
+
+const SPEC_DB_FLOOR: f32 = -64.0;
+
+struct SpectrumState {
+    /// Cached Hann window (α = 0.5), precomputed once.
+    hann: Vec<f32>,
+    planner: FftPlanner<f32>,
+    /// Peak-hold magnitudes (normalized 0..1) per band, decaying.
+    peaks: [f32; SPEC_BANDS],
+    /// Last rendered frame (band bar heights 0..1), for idle decay.
+    bars: [f32; SPEC_BANDS],
+}
+
+impl SpectrumState {
+    fn new() -> Self {
+        let hann = spectrum::hann_window(SPEC_WINDOW);
+        Self {
+            hann,
+            planner: FftPlanner::new(),
+            peaks: [0.0; SPEC_BANDS],
+            bars: [0.0; SPEC_BANDS],
+        }
+    }
+}
+
+/// Renders the analyzer frame into an RGBA8 buffer (transparent
+/// background; the panel well shows through). Bars are the live band
+/// magnitudes in the pitch accent; the peak holds ride above them in
+/// white (task book: peak hold + decay).
+fn render_spectrum(
+    bars: &[f32; SPEC_BANDS],
+    peaks: &[f32; SPEC_BANDS],
+    w: u32,
+    h: u32,
+) -> SharedPixelBuffer<Rgba8Pixel> {
+    let bw = w.max(1) as usize;
+    let bh = h.max(1) as usize;
+    let mut buf = SharedPixelBuffer::<Rgba8Pixel>::new(w.max(1), h.max(1));
+    let band_w = bw / SPEC_BANDS;
+    if band_w == 0 {
+        return buf;
+    }
+    let bytes = buf.make_mut_bytes();
+    let stride = bw * 4;
+    // Opaque write over the transparent background (bars + peak ticks).
+    let put = |x: usize, y: usize, c: [u8; 3], bytes: &mut [u8]| {
+        let off = y * stride + x * 4;
+        bytes[off] = c[0];
+        bytes[off + 1] = c[1];
+        bytes[off + 2] = c[2];
+        bytes[off + 3] = 255;
+    };
+    for (b, (&bar, &peak)) in bars.iter().zip(peaks.iter()).enumerate() {
+        let x0 = b * band_w;
+        let x1 = (x0 + band_w).min(bw).max(x0 + 1);
+        let bar_h = (bar * (bh as f32)).round() as usize;
+        let y_top = bh.saturating_sub(bar_h).min(bh.saturating_sub(1));
+        // Bar: pitch accent (the pitch engine's trace color family).
+        for y in y_top..bh {
+            for x in x0..x1 {
+                put(x, y, [0x00, 0xB4, 0xD8], bytes);
+            }
+        }
+        // Peak-hold tick (white), clamped inside the well.
+        let py = bh
+            .saturating_sub((peak * (bh as f32)).round() as usize)
+            .min(bh - 1);
+        for x in x0..x1 {
+            put(x, py, [0xE0, 0xE0, 0xE0], bytes);
+        }
+    }
+    buf
+}
+
+/// Spectrum analysis core (7.2e): Hann window + forward FFT + mapping
+/// onto `SPEC_BANDS` log-spaced bands (40 Hz..min(16 kHz, Nyquist)).
+/// Band magnitude = max bin in the band (spectral peaks, like an RTA).
+/// Pure and unit-tested; `poll_spectrum` drives it from the live tap.
+mod spectrum {
+    use rustfft::num_complex::Complex;
+    use rustfft::FftPlanner;
+    use std::f32::consts::TAU;
+
+    pub const WINDOW: usize = 2048;
+    pub const BANDS: usize = 48;
+    const F_LO: f32 = 40.0;
+    const F_HI: f32 = 16_000.0;
+
+    pub fn hann_window(n: usize) -> Vec<f32> {
+        (0..n)
+            .map(|i| {
+                let t = i as f32 / (n - 1) as f32;
+                0.5 - 0.5 * (TAU * t).cos()
+            })
+            .collect()
+    }
+
+    pub fn band_magnitudes(
+        window: &[f32],
+        rate: u32,
+        hann: &[f32],
+        planner: &mut FftPlanner<f32>,
+    ) -> [f32; BANDS] {
+        debug_assert_eq!(window.len(), WINDOW);
+        let mut bins: Vec<Complex<f32>> = window
+            .iter()
+            .zip(hann)
+            .map(|(&s, &w)| Complex::new(s * w, 0.0))
+            .collect();
+        planner.plan_fft_forward(WINDOW).process(&mut bins);
+        let norm = 2.0 / WINDOW as f32;
+        let df = rate as f32 / WINDOW as f32;
+        let f_hi = F_HI.min(rate as f32 / 2.0);
+        let ratio = (f_hi / F_LO).ln();
+        let mut mags = [0.0f32; BANDS];
+        for (b, mag) in mags.iter_mut().enumerate() {
+            let lo = F_LO * (ratio * b as f32 / BANDS as f32).exp();
+            let hi = F_LO * (ratio * (b + 1) as f32 / BANDS as f32).exp();
+            let i0 = ((lo / df).ceil() as usize).clamp(1, WINDOW / 2 - 1);
+            let i1 = ((hi / df).ceil() as usize).clamp(i0 + 1, WINDOW / 2);
+            *mag = bins[i0..i1]
+                .iter()
+                .map(|c| c.norm() * norm)
+                .fold(0.0f32, f32::max);
+        }
+        mags
+    }
+}
+
 /// Preview-mode waveform colors: the A/B view drops the voiced tint and
 /// F0 trace (they describe the *input* analysis, not the render) and uses
 /// the formant accent to signal "this is the processed side".
@@ -1940,5 +2131,71 @@ fn fmt_span(secs: f64) -> String {
         format!("{:.1} ms", secs * 1000.0)
     } else {
         format!("{:.0} µs", secs * 1_000_000.0)
+    }
+}
+
+#[cfg(test)]
+mod spectrum_tests {
+    use super::*;
+
+    #[test]
+    fn sine_energy_lands_in_its_band() {
+        let rate = 48_000u32;
+        let hann = spectrum::hann_window(SPEC_WINDOW);
+        let f0 = 440.0f32;
+        let window: Vec<f32> = (0..SPEC_WINDOW)
+            .map(|i| (std::f32::consts::TAU * f0 * i as f32 / rate as f32).sin() * 0.8)
+            .collect();
+        let mut planner = FftPlanner::new();
+        let mags = spectrum::band_magnitudes(&window, rate, &hann, &mut planner);
+        // Band edges: 40·(400)^(b/48)..40·(400)^((b+1)/48) — band 19
+        // covers ≈ 429–485 Hz, so 440 Hz must peak there.
+        let (bi, _) = mags
+            .iter()
+            .enumerate()
+            .fold(
+                (0usize, 0.0f32),
+                |(bi, best), (i, &m)| {
+                    if m > best { (i, m) } else { (bi, best) }
+                },
+            );
+        assert!((18..=21).contains(&bi), "peak band {bi} for 440 Hz");
+        // Energy well above the peak band is negligible (no leakage).
+        for (i, m) in mags.iter().enumerate() {
+            if i > bi + 4 {
+                assert!(*m < mags[bi] * 0.05, "band {i} leaked {m}");
+            }
+        }
+    }
+
+    #[test]
+    fn silence_maps_to_silent_bars() {
+        let rate = 48_000u32;
+        let hann = spectrum::hann_window(SPEC_WINDOW);
+        let window = vec![0.0f32; SPEC_WINDOW];
+        let mut planner = FftPlanner::new();
+        let mags = spectrum::band_magnitudes(&window, rate, &hann, &mut planner);
+        assert!(mags.iter().all(|&m| m < 1e-6));
+    }
+
+    #[test]
+    fn renderer_draws_bars_where_the_data_is() {
+        let mut bars = [0.0f32; SPEC_BANDS];
+        let mut peaks = [0.0f32; SPEC_BANDS];
+        bars[10] = 0.5; // half-height bar in band 10
+        peaks[10] = 0.5;
+        let buf = render_spectrum(&bars, &peaks, 480, 100);
+        let bytes = buf.as_bytes();
+        let stride = 480 * 4;
+        // Band 10 spans x = 100..110; the bar covers the bottom half —
+        // a pixel mid-bar must be the pitch accent.
+        let off = 60 * stride + 105 * 4; // y=60 (mid-bar), x=105
+        assert_eq!(&bytes[off..off + 3], &[0x00, 0xB4, 0xD8]);
+        // The peak tick sits at y ≈ 50 (light gray).
+        let off2 = 50 * stride + 105 * 4;
+        assert_eq!(&bytes[off2..off2 + 3], &[0xE0, 0xE0, 0xE0]);
+        // Empty band 30 stays transparent.
+        let off3 = 90 * stride + 305 * 4;
+        assert_eq!(bytes[off3 + 3], 0);
     }
 }

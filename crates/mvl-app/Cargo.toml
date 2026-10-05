@@ -21,6 +21,9 @@ mvl-audio = { path = "../mvl-audio" }
 slint = { workspace = true }
 png = { workspace = true }
 rfd = { workspace = true }
+# Real-time spectrum analyzer (7.2e): the FFT runs on the UI poll tick
+# over the newest window from the output tap (mvl-audio::SpectrumTap).
+rustfft = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"

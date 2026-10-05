@@ -1,0 +1,99 @@
+// Copyright © salim77007j
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+// Spectrum analyzer panel (Phase 7.2e): the RTA from the reference.
+// The image is rendered by Rust from real FFTs of the output tap
+// (2048-sample Hann window, log-frequency bars 40 Hz–16 kHz, peak
+// hold + decay). The axis labels are the scale markings of the real
+// data behind them — not decoration.
+
+import { Tokens } from "tokens.slint";
+
+export component SpectrumPanel inherits Rectangle {
+    background: Tokens.bg-panel;
+    border-radius: Tokens.radius-sm;
+    border-width: 1px;
+    border-color: Tokens.border-subtle;
+    clip: true;
+
+    in property <string> t-title;
+    // The rendered analyzer frame (RGBA, transparent bg).
+    in property <image> spectrum-image;
+    in property <bool> active: false;
+    // Physical size of the display well (read by Rust for rendering).
+    out property <length> view-width <=> well.width;
+    out property <length> view-height <=> well.height;
+
+    VerticalLayout {
+        padding: Tokens.sp-1;
+        spacing: Tokens.sp-half;
+
+        // Header row: title + live indicator (follows the transport).
+        HorizontalLayout {
+            height: 14px;
+            spacing: Tokens.sp-half;
+
+            Text {
+                text: root.t-title;
+                color: Tokens.text-faint;
+                font-size: 10px;
+                letter-spacing: 1.5px;
+                vertical-alignment: center;
+            }
+
+            Rectangle { }
+
+            Rectangle {
+                width: 6px;
+                height: 6px;
+                y: (parent.height - 6px) / 2;
+                border-radius: 3px;
+                background: root.active ? Tokens.accent-air : Tokens.vu-off;
+            }
+        }
+
+        well := Rectangle {
+            // Inset display well.
+            background: Tokens.bg-well;
+            border-radius: 2px;
+            border-width: 1px;
+            border-color: Tokens.well-grid;
+            clip: true;
+
+            Image {
+                width: parent.width;
+                height: parent.height;
+                source: root.spectrum-image;
+                image-fit: fill;
+            }
+
+            // Frequency axis labels (positions match the log bands
+            // drawn by Rust: 100 Hz ≈ band 10/48, 1 kHz ≈ 24/48,
+            // 10 kHz ≈ 39/48 of the width).
+            Text {
+                x: parent.width * 0.208 - 8px;
+                y: parent.height - 13px;
+                text: "100";
+                color: Tokens.text-faint;
+                font-family: Tokens.font-mono;
+                font-size: 8px;
+            }
+            Text {
+                x: parent.width * 0.50 - 5px;
+                y: parent.height - 13px;
+                text: "1k";
+                color: Tokens.text-faint;
+                font-family: Tokens.font-mono;
+                font-size: 8px;
+            }
+            Text {
+                x: parent.width * 0.8125 - 9px;
+                y: parent.height - 13px;
+                text: "10k";
+                color: Tokens.text-faint;
+                font-family: Tokens.font-mono;
+                font-size: 8px;
+            }
+        }
+    }
+}

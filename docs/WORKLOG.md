@@ -391,3 +391,33 @@ style — analyzed, becomes the 7.2 visual target).
 - Evidence: ui72b-layout-en.png, ui72b-layout-ar-devices.png (full RTL
   mirror incl. menus/transport/status), ui72b-layout-export.png.
 - Tests: 120 app+audio green (volume tests added), fmt+clippy clean.
+
+## 2026-10-05 — Phase 7.2d+7.2e: real metering + real-FFT spectrum analyzer
+
+- **7.2d (c612da5)**: lock-free `MeterTap` (peak cells + duty EMA,
+  atomics only on the RT path) — output tap in the player callback
+  (post-gain, pre-conversion; measures what the DAC actually gets) and
+  input tap in the capture callback (reflects the true incoming signal
+  even when the ring overflows). Transport L/R meters + peak-hold ticks
+  driven per 40 ms poll with ballistics (fall 20 %/tick, 2 s peak hold,
+  slow decay); recording switches the meters to the input source.
+  Status bar gains the RSS + DSP(%) segment (Linux /proc statm,
+  macOS task_info via libc, Windows GetProcessMemoryInfo via
+  windows-sys — target-gated deps; segment hides when unknown).
+  Tests: tap peak/drain, mono mirror, duty EMA bounds, degenerate
+  inputs, RSS sanity. +6 tests.
+- **7.2e (this commit)**: `SpectrumTap` — fixed 4096-slot atomic ring
+  (mono downmix, monotonic cursor, overwrites safe), drained by the UI
+  into a 2048-sample window → Hann → rustfft forward → 48 log-spaced
+  bands (40 Hz–16 kHz, band = max bin, like an RTA) → dB mapping
+  (floor −64 dB) → bars + peak hold/decay rendered into a
+  SharedPixelBuffer in the panel's physical pixels. Panel sits in the
+  right column under the three strips; live LED follows the transport;
+  decay-to-silence when stopped (never a frozen frame). Analysis core
+  extracted as a pure module + tests: 440 Hz sine peaks in band 19
+  (≈429–485 Hz), zero leakage above, silence → silent bars, renderer
+  pixel assertions. +3 tests. Headless evidence shows the honest empty
+  well (no audio device in the sandbox — the FFT path is exercised by
+  the unit tests and will show live bars on real hardware in 7.3).
+- Tests at HEAD: 121 app+audio green (57 audio, 18 app lib, 2 shot,
+  ...), fmt + clippy `-D`-clean (0 warnings).

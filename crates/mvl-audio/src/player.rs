@@ -24,6 +24,7 @@ use crate::buffer::AudioBuffer;
 use crate::error::{AudioError, Result};
 use crate::meter::MeterTap;
 use crate::preview::StreamFifo;
+use crate::spectrum::SpectrumTap;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -62,6 +63,8 @@ pub struct Player {
     volume: Arc<AtomicU32>,
     /// Real-time level/duty tap (the transport meters' data source).
     meter: Arc<MeterTap>,
+    /// Real-time spectrum tap (the analyzer's data source).
+    spectrum: Arc<SpectrumTap>,
 }
 
 impl Player {
@@ -131,6 +134,7 @@ impl Player {
 
         let volume = Arc::new(AtomicU32::new(1.0f32.to_bits()));
         let meter = MeterTap::new();
+        let spectrum = SpectrumTap::new();
 
         let stream = {
             let stream_config = supported.config();
@@ -143,6 +147,7 @@ impl Player {
                     output_channels,
                     Arc::clone(&volume),
                     Arc::clone(&meter),
+                    Arc::clone(&spectrum),
                 )?,
                 SampleFormat::I32 => build_output_stream::<i32>(
                     device,
@@ -152,6 +157,7 @@ impl Player {
                     output_channels,
                     Arc::clone(&volume),
                     Arc::clone(&meter),
+                    Arc::clone(&spectrum),
                 )?,
                 SampleFormat::I16 => build_output_stream::<i16>(
                     device,
@@ -161,6 +167,7 @@ impl Player {
                     output_channels,
                     Arc::clone(&volume),
                     Arc::clone(&meter),
+                    Arc::clone(&spectrum),
                 )?,
                 SampleFormat::I8 => build_output_stream::<i8>(
                     device,
@@ -170,6 +177,7 @@ impl Player {
                     output_channels,
                     Arc::clone(&volume),
                     Arc::clone(&meter),
+                    Arc::clone(&spectrum),
                 )?,
                 SampleFormat::U8 => build_output_stream::<u8>(
                     device,
@@ -179,6 +187,7 @@ impl Player {
                     output_channels,
                     Arc::clone(&volume),
                     Arc::clone(&meter),
+                    Arc::clone(&spectrum),
                 )?,
                 other => {
                     return Err(AudioError::UnsupportedConfig(format!(
@@ -198,6 +207,7 @@ impl Player {
             output_channels,
             volume,
             meter,
+            spectrum,
         })
     }
 
@@ -206,6 +216,12 @@ impl Player {
     /// signal, never a simulation.
     pub fn meter(&self) -> Arc<MeterTap> {
         Arc::clone(&self.meter)
+    }
+
+    /// The real-time spectrum tap (mono downmix ring). Drained by the
+    /// UI analyzer on its poll tick.
+    pub fn spectrum(&self) -> Arc<SpectrumTap> {
+        Arc::clone(&self.spectrum)
     }
 
     /// Output configuration actually granted by the device.
@@ -454,6 +470,7 @@ impl FromF32 for u8 {
 /// transport state machine and the channel mapping live in the `f32`
 /// domain (a reused scratch buffer, zero per-callback allocation after
 /// warm-up); the final conversion to `T` clamps.
+#[allow(clippy::too_many_arguments)] // the RT callback owns all of these
 fn build_output_stream<T>(
     device: &Device,
     config: &StreamConfig,
@@ -462,6 +479,7 @@ fn build_output_stream<T>(
     out_channels: u16,
     volume: Arc<AtomicU32>,
     meter: Arc<MeterTap>,
+    spectrum: Arc<SpectrumTap>,
 ) -> Result<Stream>
 where
     T: cpal::SizedSample + FromF32 + Send + 'static,
@@ -525,8 +543,10 @@ where
                 }
 
                 // Publish the true post-gain levels + callback duty for
-                // the UI meters (lock-free, see meter.rs).
+                // the UI meters (lock-free, see meter.rs), and feed the
+                // spectrum tap the same mono signal the DAC receives.
                 meter.push_interleaved(&scratch, ch);
+                spectrum.push_interleaved(&scratch, ch);
                 let budget = out_frames as f64 / f64::from(out_rate);
                 meter.push_duty(cb_start.elapsed().as_secs_f64(), budget);
 

@@ -124,6 +124,8 @@ pub struct StrTable {
     pub cap_voiced: &'static str,
     /// Status: drag-selection created, `{span}` is the formatted span.
     pub status_selected: &'static str,
+    /// Spectrum panel header (engineering label, both languages).
+    pub spectrum: &'static str,
 }
 
 pub const EN: StrTable = StrTable {
@@ -199,6 +201,7 @@ pub const EN: StrTable = StrTable {
     cap_f0: "Median F0",
     cap_voiced: "Voiced",
     status_selected: "selection {span}",
+    spectrum: "SPECTRUM",
 };
 
 pub const AR: StrTable = StrTable {
@@ -274,6 +277,7 @@ pub const AR: StrTable = StrTable {
     cap_f0: "الوسط F0",
     cap_voiced: "مصوّت",
     status_selected: "تحديد {span}",
+    spectrum: "SPECTRUM",
 };
 
 pub const AR_RECORD_CAP: &str = " (الجهاز محدود — 192 kHz غير متاح)";
@@ -403,6 +407,7 @@ mod tests {
                 assert!(!s72.is_empty());
             }
             assert!(t.status_selected.contains("{span}"));
+            assert!(!t.spectrum.is_empty());
         }
         // Compile-time-checked invariants (clippy wants const blocks for
         // constant assertions — they are constants on purpose).
