@@ -1,0 +1,366 @@
+// Copyright © salim77007j
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+// Control strip (Phase 7.2): the studio-style engine channel from the
+// reference — a large rotary knob with an LED position ring, the mono
+// value readout, a reset affordance, a neutral indicator and the
+// precision groove from the Phase 4 widget (keyboard-grade resolution
+// kept: arrows = 1 step, PageUp/Down = coarse step, double-click =
+// neutral).
+//
+// Honest scope (disclosed in the phase report): the LED ring shows the
+// *parameter position* — the only quantity a single-track engine has to
+// meter per-strip. Signal VU meters live in the transport where real
+// output/input levels flow; no decorative VU arcs, no solo/bypass
+// buttons (a one-track engine has nothing to solo and no bypass stage).
+
+import { Tokens } from "tokens.slint";
+import { Icons } from "icons.slint";
+
+// ── Rotary knob ──────────────────────────────────────────────────────
+// 270° sweep from -225° (min) to +45° (max), 0° = 12 o'clock. The LED
+// ring + the indicator dot are one visual truth: both derive from the
+// same normalized `frac` the engine echoes back.
+component Knob inherits Rectangle {
+    width: 76px;
+    height: 76px;
+    border-radius: 38px;
+
+    in property <float> frac: 0.5;          // 0..1 normalized position
+    in property <color> accent: Tokens.accent-pitch;
+    in property <bool> enabled: true;
+    callback adjusted(delta-frac: float);   // drag/wheel delta (normalized)
+    callback reset-requested();             // double-click
+
+    property <length> cx: self.width / 2;
+    property <length> cy: self.height / 2;
+    property <float> ring-r: 34.0;          // LED ring radius (px units)
+    property <float> value-deg: -225.0 + root.frac.clamp(0.0, 1.0) * 270.0;
+
+    // LED ring: 21 dots over the sweep (lit up to the value).
+    for i in 21: Rectangle {
+        property <float> deg: -225.0 + i * 13.5;
+        property <angle> rad: (deg - 90.0) * 1deg;
+        x: parent.cx + Math.cos(rad) * root.ring-r * 1px - self.width / 2;
+        y: parent.cy + Math.sin(rad) * root.ring-r * 1px - self.height / 2;
+        width: 3px;
+        height: 3px;
+        border-radius: 1.5px;
+        background: deg <= root.value-deg + 0.01
+            ? root.accent : Tokens.vu-off;
+        opacity: root.enabled ? 1.0 : 0.4;
+    }
+
+    // Face: layered circles approximate a radial gradient (dark rim →
+    // slightly lighter face — the reference's knob chrome).
+    Rectangle {
+        x: 7px;
+        y: 7px;
+        width: parent.width - 14px;
+        height: parent.height - 14px;
+        border-radius: 31px;
+        background: Tokens.bg-elevated;
+        border-width: 1px;
+        border-color: Tokens.border-subtle;
+    }
+    Rectangle {
+        x: 12px;
+        y: 12px;
+        width: parent.width - 24px;
+        height: parent.height - 24px;
+        border-radius: 26px;
+        background: Tokens.bg-panel;
+        border-width: 1px;
+        border-color: #333333;
+    }
+
+    // Indicator dot (the pointer).
+    Rectangle {
+        property <angle> rad: (root.value-deg - 90.0) * 1deg;
+        x: parent.cx + Math.cos(rad) * 18.0 * 1px - self.width / 2;
+        y: parent.cy + Math.sin(rad) * 18.0 * 1px - self.height / 2;
+        width: 5px;
+        height: 5px;
+        border-radius: 2.5px;
+        background: root.enabled ? Tokens.text-primary : Tokens.text-faint;
+    }
+
+    // Center cap dot.
+    Rectangle {
+        x: parent.cx - 2px;
+        y: parent.cy - 2px;
+        width: 4px;
+        height: 4px;
+        border-radius: 2px;
+        background: Tokens.text-faint;
+    }
+
+    // Interaction: vertical drag = fine adjustment (full strip height ≈
+    // the full range), wheel = coarse steps, double-click = reset.
+    property <length> last-y: 0;
+    touch := TouchArea {
+        enabled: root.enabled;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down) {
+                root.last-y = self.mouse-y;
+            }
+        }
+        moved => {
+            if (self.pressed) {
+                root.adjusted((root.last-y - self.mouse-y) / 1px / 150.0);
+                root.last-y = self.mouse-y;
+            }
+        }
+        scroll-event(e) => {
+            if (e.delta-y > 0) {
+                root.adjusted(0.02);
+            } else if (e.delta-y < 0) {
+                root.adjusted(-0.02);
+            }
+            accept
+        }
+        double-clicked => { root.reset-requested(); }
+    }
+}
+
+// ── The strip ────────────────────────────────────────────────────────
+export component ControlStrip inherits Rectangle {
+    height: 128px;
+    border-radius: Tokens.radius-sm;
+    background: Tokens.bg-panel;
+    border-width: 1px;
+    border-color: Tokens.border-subtle;
+
+    in property <string> label;
+    in property <string> unit;
+    in property <float> min;
+    in property <float> max;
+    in property <float> step;
+    in property <float> coarse-step;
+    in property <float> neutral;
+    in property <color> accent: Tokens.accent-pitch;
+    /// Formatted readout, owned by the Rust bridge (canonical grid).
+    in property <string> readout;
+    in property <bool> enabled: true;
+    in property <bool> rtl: false;
+
+    in-out property <float> value: self.neutral;
+    callback changed(float);
+
+    property <float> span: self.max - self.min;
+    property <bool> at-neutral: Math.abs(self.value - self.neutral) < 0.000001;
+
+    // Accent edge bar (the strip's identity color).
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: 3px;
+        height: parent.height;
+        border-radius: Tokens.radius-sm;
+        background: root.accent;
+        opacity: root.enabled ? 1.0 : 0.35;
+    }
+
+    focus-ring := FocusScope {
+        key-pressed(e) => {
+            if (!root.enabled) {
+                return reject;
+            }
+            if (e.text == Key.LeftArrow || e.text == Key.DownArrow) {
+                root.value = Math.max(root.min, root.value - root.step);
+                root.changed(root.value);
+                return accept;
+            }
+            if (e.text == Key.RightArrow || e.text == Key.UpArrow) {
+                root.value = Math.min(root.max, root.value + root.step);
+                root.changed(root.value);
+                return accept;
+            }
+            if (e.text == Key.PageDown) {
+                root.value = Math.max(root.min, root.value - root.coarse-step);
+                root.changed(root.value);
+                return accept;
+            }
+            if (e.text == Key.PageUp) {
+                root.value = Math.min(root.max, root.value + root.coarse-step);
+                root.changed(root.value);
+                return accept;
+            }
+            reject
+        }
+
+        HorizontalLayout {
+            padding-left: Tokens.sp-2;
+            padding-right: Tokens.sp-1;
+            padding-top: Tokens.sp-half;
+            padding-bottom: Tokens.sp-half;
+            spacing: Tokens.sp-1;
+
+            // ── Knob column (drag/wheel/double-click) ───────────────
+            Knob {
+                layout-order: root.rtl ? 2 : 0;
+                frac: (root.value - root.min) / root.span;
+                accent: root.accent;
+                enabled: root.enabled;
+                adjusted(d) => {
+                    root.value = Math.max(root.min, Math.min(root.max, root.value + d * root.span));
+                    root.changed(root.value);
+                }
+                reset-requested() => {
+                    root.value = root.neutral;
+                    root.changed(root.value);
+                }
+            }
+
+            // ── Text + groove column ────────────────────────────────
+            VerticalLayout {
+                layout-order: 1;
+                spacing: Tokens.sp-half;
+
+                // Header: title + readout + reset + neutral LED.
+                HorizontalLayout {
+                    height: 24px;
+                    spacing: Tokens.sp-half;
+
+                    Text {
+                        layout-order: root.rtl ? 3 : 0;
+                        text: root.label;
+                        color: Tokens.text-muted;
+                        font-size: Tokens.font-size-label;
+                        vertical-alignment: center;
+                    }
+
+                    Rectangle { layout-order: root.rtl ? 2 : 1; } // spring
+
+                    // Neutral indicator: lit when the engine stage is
+                    // active (value ≠ neutral) — a real derived state.
+                    Rectangle {
+                        layout-order: 2;
+                        width: 7px;
+                        height: 7px;
+                        y: (parent.height - 7px) / 2;
+                        border-radius: 3.5px;
+                        background: root.at-neutral ? Tokens.vu-off : root.accent;
+                    }
+
+                    reset-chip := Rectangle {
+                        layout-order: 3;
+                        width: 22px;
+                        height: 22px;
+                        border-radius: Tokens.radius-sm;
+                        background: reset-touch.has-hover
+                            ? Tokens.bg-elevated-hover : transparent;
+
+                        reset-touch := TouchArea {
+                            enabled: root.enabled;
+                            clicked => {
+                                root.value = root.neutral;
+                                root.changed(root.value);
+                            }
+                        }
+
+                        Path {
+                            width: 12px;
+                            height: 12px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            commands: Icons.reset;
+                            fill: root.enabled ? Tokens.text-muted : Tokens.text-faint;
+                            viewbox-width: 16;
+                            viewbox-height: 16;
+                        }
+                    }
+
+                    Text {
+                        layout-order: root.rtl ? 0 : 4;
+                        text: root.readout;
+                        color: root.accent;
+                        font-family: Tokens.font-mono;
+                        font-size: Tokens.font-size-readout;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                        horizontal-alignment: right;
+                        width: 76px;
+                        overflow: elide;
+                    }
+                }
+
+                // Precision groove (Phase 4 contract kept).
+                Rectangle {
+                    height: 28px;
+
+                    Rectangle {
+                        y: (parent.height - 4px) / 2;
+                        height: 4px;
+                        border-radius: 2px;
+                        background: Tokens.vu-off;
+
+                        Rectangle { // fill
+                            x: 0;
+                            width: Math.max(
+                                0px,
+                                Math.min(
+                                    parent.width,
+                                    (root.value - root.min) / root.span * parent.width
+                                )
+                            );
+                            height: parent.height;
+                            border-radius: 2px;
+                            background: root.accent;
+                        }
+
+                        thumb := Rectangle { // thumb
+                            x: Math.max(
+                                -7px,
+                                Math.min(
+                                    parent.width - 7px,
+                                    (root.value - root.min) / root.span * parent.width - 7px
+                                )
+                            );
+                            y: (parent.height - self.height) / 2;
+                            width: 14px;
+                            height: 14px;
+                            border-radius: 7px;
+                            background: Tokens.text-primary;
+                            border-width: 2px;
+                            border-color: root.accent;
+                        }
+                    }
+
+                    groove-touch := TouchArea {
+                        enabled: root.enabled;
+                        moved => {
+                            if (self.pressed) {
+                                root.value = root.min +
+                                    Math.max(0.0, Math.min(1.0, self.mouse-x / parent.width))
+                                    * root.span;
+                                root.changed(root.value);
+                            }
+                        }
+                        double-clicked => {
+                            root.value = root.neutral;
+                            root.changed(root.value);
+                        }
+                        pointer-event(e) => {
+                            if (e.kind == PointerEventKind.down) {
+                                root.value = root.min +
+                                    Math.max(0.0, Math.min(1.0, self.mouse-x / parent.width))
+                                    * root.span;
+                                root.changed(root.value);
+                            }
+                        }
+                    }
+                }
+
+                // Unit caption under the groove.
+                Text {
+                    text: root.unit;
+                    color: Tokens.text-faint;
+                    font-family: Tokens.font-mono;
+                    font-size: 9px;
+                    height: 10px;
+                }
+            }
+        }
+    }
+}

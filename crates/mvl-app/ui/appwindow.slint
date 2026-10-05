@@ -17,7 +17,7 @@
 import { Tokens } from "tokens.slint";
 import { WaveformPanel } from "waveform-panel.slint";
 import { TimeRuler, RulerTick } from "time-ruler.slint";
-import { PrecisionSlider } from "precision-slider.slint";
+import { ControlStrip } from "control-strip.slint";
 import { Icons, IconButton, ChipButton } from "icons.slint";
 import { TransportBar } from "transport-bar.slint";
 import { MenuBar } from "menu-bar.slint";
@@ -335,7 +335,7 @@ export component AppWindow inherits Window {
                         padding: Tokens.sp-quarter;
                         spacing: Tokens.sp-1;
 
-                        pitch := PrecisionSlider {
+                        pitch := ControlStrip {
                             label: root.t-pitch;
                             rtl: root.rtl;
                             unit: "st";
@@ -351,7 +351,7 @@ export component AppWindow inherits Window {
                             changed(v) => { root.pitch-changed(v); }
                         }
 
-                        air := PrecisionSlider {
+                        air := ControlStrip {
                             label: root.t-air;
                             rtl: root.rtl;
                             unit: "dB";
@@ -367,7 +367,7 @@ export component AppWindow inherits Window {
                             changed(v) => { root.air-changed(v); }
                         }
 
-                        formant := PrecisionSlider {
+                        formant := ControlStrip {
                             label: root.t-formant;
                             rtl: root.rtl;
                             unit: "mm";
