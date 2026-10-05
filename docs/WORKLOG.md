@@ -485,3 +485,11 @@ style — analyzed, becomes the 7.2 visual target).
   malloc_trim experiment tried and reverted (no effect).
 - docs/PHASE_7_REPORT.md written (before/after, 10-gate scorecard, open
   human items, verdict). Tag v1.0.0 follows this commit.
+
+## 2026-10-05 — v1.0.0 tagged and published
+
+- Tag v1.0.0 at 33a0b63 (CI 5-image green). Release run 37330924094:
+  three platforms built + ran the binary + uploaded bundles; GitHub
+  Release v1.0.0 (prerelease=false) carries macOS (universal + .app,
+  30 MB), Ubuntu (11 MB), Windows (8 MB). rc.1 retained as prerelease.
+- Phase 7 complete. Open human items live in docs/PHASE_7_REPORT.md §5.
