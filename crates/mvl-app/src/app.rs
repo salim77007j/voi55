@@ -1009,7 +1009,7 @@ impl App {
         } else {
             mag
         };
-        let mut model = VecModel::default();
+        let model = VecModel::default();
         let mut t = (start / step).ceil() * step;
         while t <= end + 1e-12 {
             let frac = ((t - start) / span).clamp(0.0, 1.0) as f32;
