@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Micro-Vocal Lab</string>
+    <key>CFBundleDisplayName</key>
+    <string>Micro-Vocal Lab</string>
+    <key>CFBundleExecutable</key>
+    <string>micro-vocal-lab</string>
+    <key>CFBundleIdentifier</key>
+    <string>dev.microvocallab.MicroVocalLab</string>
+    <key>CFBundleVersion</key>
+    <string>@APP_VERSION@</string>
+    <key>CFBundleShortVersionString</key>
+    <string>@APP_VERSION@</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <!-- aarch64-apple-darwin (Rust) floor; the release artifact is a
+         universal binary, so 11.0 is the honest minimum (Big Sur). -->
+    <key>LSMinimumSystemVersion</key>
+    <string>11.0</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.audio</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <!-- CoreAudio shows the microphone permission prompt only when the
+         first input stream is built; this string is what that prompt (and
+         System Settings > Privacy > Microphone) displays. Without it an
+         unsigned build's capture can be silently denied. -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Micro-Vocal Lab records your voice through the microphone so you can edit pitch, formant and breath on your own takes. Recording starts only when you press Record.</string>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+</dict>
+</plist>

@@ -54,6 +54,22 @@ jobs:
       - name: Build release binary
         run: cargo build --release -p mvl-app
 
+      # macOS ships a universal binary (arm64 + x86_64) so both Apple
+      # Silicon and Intel Macs run the same artifact; the smoke/size steps
+      # below then exercise the native slice. lipo output is re-signed
+      # ad-hoc (the linker-produced signature does not survive lipo).
+      - name: Build universal macOS binary (arm64 + x86_64)
+        if: runner.os == 'macOS'
+        run: |
+          rustup target add x86_64-apple-darwin
+          cargo build --release -p mvl-app --target x86_64-apple-darwin
+          lipo -create \
+            "target/release/${{ matrix.binary }}" \
+            "target/x86_64-apple-darwin/release/${{ matrix.binary }}" \
+            -output "target/release/${{ matrix.binary }}"
+          lipo -info "target/release/${{ matrix.binary }}"
+          codesign --force -s - "target/release/${{ matrix.binary }}"
+
       # Gate: the shipped artifact must run, not just link — renders a real
       # frame through the headless software renderer.
       - name: Run the release binary (headless render)
@@ -75,12 +91,39 @@ jobs:
             exit 1
           fi
 
+      # Linux: plain tarball with the binary (CLI-first platform).
       - name: Bundle (binary + README + LICENSE)
-        if: runner.os != 'Windows'
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           dir="micro-vocal-lab-${{ matrix.os }}"
           mkdir "$dir"
+          cp "target/release/${{ matrix.binary }}" "$dir/"
+          cp README.md LICENSE "$dir/"
+          tar czf "$dir.tar.gz" "$dir"
+
+      # macOS: a real .app bundle — Info.plist carries NSMicrophoneUsage-
+      # Description (CoreAudio's capture prompt reads it; without it an
+      # unsigned build's capture can be silently denied) plus the version
+      # taken from the workspace manifest. The raw binary ships alongside
+      # for terminal users; the bundle is ad-hoc signed (NOT a Developer ID
+      # signature — Gatekeeper still requires right-click-open, documented
+      # in the report).
+      - name: Bundle macOS (.app + raw binary + README + LICENSE)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          echo "bundle version: ${version}"
+          dir="micro-vocal-lab-${{ matrix.os }}"
+          app="Micro-Vocal Lab.app"
+          mkdir -p "$app/Contents/MacOS"
+          sed "s/@APP_VERSION@/${version}/" .github/macos/Info.plist > "$app/Contents/Info.plist"
+          plutil -lint "$app/Contents/Info.plist"
+          cp "target/release/${{ matrix.binary }}" "$app/Contents/MacOS/micro-vocal-lab"
+          codesign --force -s - "$app"
+          mkdir "$dir"
+          cp -R "$app" "$dir/"
           cp "target/release/${{ matrix.binary }}" "$dir/"
           cp README.md LICENSE "$dir/"
           tar czf "$dir.tar.gz" "$dir"
