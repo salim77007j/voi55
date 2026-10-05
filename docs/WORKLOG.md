@@ -436,3 +436,31 @@ style — analyzed, becomes the 7.2 visual target).
   audit, 6 honest deviations, gaps → 7.3/7.4, verdict.
 - Final state: 131 tests green (56 core + 57 audio + 16 app + 2 shot),
   fmt + clippy clean, all sub-item commits pushed.
+
+## 2026-10-05 — Phase 7.3: cross-platform verification (sandbox honesty edition)
+
+- Environment reset mid-phase (toolchain+repo gone): recovered via rustup
+  user install, alsa-lib 1.2.14 source build (~/.local/alsa), xkbcommon-
+  x11/libxcb-xkb user-prefix debs; repo re-cloned; git history remained
+  authoritative (7.1+7.2 already done).
+- 7.3c macOS bundle: .github/macos/Info.plist (NSMicrophoneUsageDescription,
+  version from workspace manifest, LSMinimumSystemVersion 11.0) + universal
+  arm64+x86_64 lipo build + ad-hoc codesign + plutil -lint; verified end-to-
+  end on a real macos-26-arm64 runner (release dispatch 37312400391).
+- Per-platform render evidence (real runners executing the binary):
+  smoke-{ubuntu,windows,macos}-latest.png -> docs/evidence/phase7/platform/;
+  macOS frame shows live CoreAudio enumeration ("Apple Virtual Sound
+  Device"), Ubuntu frame ALSA default.
+- Sandbox deep runs: 131/131 tests green locally; real X11 event-loop run
+  under Xvfb (0 panics, honest empty state; first attempt panicked on
+  missing libxkbcommon-x11 and the 7.1d panic hook caught it as designed);
+  --selftest-audio honest failure without a device; windows-latest PE
+  executed under Wine 10.0 (0 panics, full UI render, 35 s+ alive).
+- Found CI red at the 7.2 headline commit (macOS clippy: libc deprecated
+  mach_task_self) -> fixed with mach2 (52c1f02); CI matrix extended to
+  macos-15 + macos-14 (task book targets) -> CI green on 5 images
+  (ubuntu-24.04, windows-2025, macos-26, macos-15, macos-14) at 1e2c9c5.
+- Honest gaps: Fedora 41 unverified (no runner); WASAPI/CoreAudio audible
+  playback, mic capture, loopback latency, Gatekeeper flow = human tasks
+  (VALIDATION_REPORT §3 stands); Wine font/clip quirks disclosed as proxy
+  artifacts. Report: docs/PHASE_7_3_REPORT.md.
