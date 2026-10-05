@@ -14,7 +14,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # 7.3: macos-14/15 are the task book's target OS versions (Sonoma /
+        # Sequoia); macos-latest currently tracks macOS 26. Every entry runs
+        # fmt + clippy + build + tests on real Apple hardware.
+        os: [ubuntu-latest, windows-latest, macos-latest, macos-15, macos-14]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
