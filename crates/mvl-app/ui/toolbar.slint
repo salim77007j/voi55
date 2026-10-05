@@ -1,0 +1,188 @@
+// Copyright © salim77007j
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+// Toolbar (Phase 7.2): brand block + primary actions (New Recording,
+// Import, Export), devices and language affordances. Every control is
+// wired to the same real commands as the menus (No-Fake-UI).
+
+import { Tokens } from "tokens.slint";
+import { Icons, IconButton } from "icons.slint";
+
+// A labeled toolbar action: icon above a 10 px caption (the reference
+// DAW shows icon+caption pairs on its primary actions).
+export component ToolAction inherits Rectangle {
+    width: 64px;
+    height: 40px;
+    border-radius: Tokens.radius-sm;
+    background: touch.pressed ? Tokens.bg-elevated-press
+        : touch.has-hover ? Tokens.bg-elevated-hover
+        : transparent;
+
+    in property <string> icon;
+    in property <string> label;
+    in property <bool> enabled: true;
+    in property <bool> active: false;
+    in property <color> accent: Tokens.text-primary;
+    callback clicked;
+
+    opacity: root.enabled ? 1.0 : 0.4;
+    border-width: 1px;
+    border-color: root.active ? root.accent : transparent;
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+
+    Path {
+        width: 16px;
+        height: 16px;
+        x: (parent.width - self.width) / 2;
+        y: 5px;
+        commands: root.icon;
+        fill: root.active ? root.accent : Tokens.text-primary;
+        viewbox-width: 16;
+        viewbox-height: 16;
+    }
+
+    Text {
+        y: 23px;
+        width: parent.width;
+        height: 12px;
+        text: root.label;
+        color: Tokens.text-muted;
+        font-size: 10px;
+        horizontal-alignment: center;
+    }
+
+    animate background { duration: Tokens.anim-fast; easing: Tokens.motion; }
+}
+
+export component Toolbar inherits Rectangle {
+    height: 44px;
+    background: Tokens.bg-elevated;
+
+    in property <bool> rtl: false;
+    in property <string> t-version;
+    in property <string> t-record;      // "New recording" caption
+    in property <string> t-import;      // "Import" caption
+    in property <string> t-export;      // "Export" caption
+    in property <bool> has-project: false;
+    in property <bool> recording: false;
+    in property <string> t-language;
+
+    callback import-clicked();
+    callback record-clicked();
+    callback export-clicked();
+    callback devices-clicked();
+    callback toggle-language();
+
+    HorizontalLayout {
+        padding-left: Tokens.sp-2;
+        padding-right: Tokens.sp-2;
+        spacing: Tokens.sp-1;
+
+        // ── Brand block ─────────────────────────────────────────────
+        brand := Rectangle {
+            layout-order: root.rtl ? 7 : 0;
+            width: logo.preferred-width + Tokens.sp-3;
+            height: parent.height;
+
+            logo := HorizontalLayout {
+                x: root.rtl ? parent.width - self.width - Tokens.sp-1 : Tokens.sp-1;
+                y: (parent.height - self.height) / 2;
+                spacing: Tokens.sp-1;
+                alignment: start;
+
+                Rectangle {
+                    width: 22px;
+                    height: 22px;
+                    y: (parent.height - 22px) / 2;
+                    border-radius: Tokens.radius-sm;
+                    background: Tokens.accent-pitch;
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 0;
+
+                    Text {
+                        text: "Micro-Vocal Lab";
+                        font-weight: 600;
+                        font-size: Tokens.font-size-body;
+                        color: Tokens.text-primary;
+                    }
+
+                    Text {
+                        text: root.t-version;
+                        color: Tokens.text-muted;
+                        font-size: 10px;
+                        font-family: Tokens.font-mono;
+                    }
+                }
+            }
+        }
+
+        Rectangle { layout-order: root.rtl ? 6 : 1; width: Tokens.sp-2; } // gap
+
+        // ── Primary actions ─────────────────────────────────────────
+        ToolAction {
+            layout-order: root.rtl ? 5 : 2;
+            icon: root.recording ? Icons.stop : Icons.record;
+            label: root.t-record;
+            accent: Tokens.state-record;
+            active: root.recording;
+            clicked => { root.record-clicked(); }
+        }
+
+        ToolAction {
+            layout-order: root.rtl ? 4 : 3;
+            icon: Icons.import;
+            label: root.t-import;
+            clicked => { root.import-clicked(); }
+        }
+
+        ToolAction {
+            layout-order: root.rtl ? 3 : 4;
+            icon: Icons.export;
+            label: root.t-export;
+            enabled: root.has-project;
+            clicked => { root.export-clicked(); }
+        }
+
+        Rectangle { layout-order: root.rtl ? 2 : 5; } // spring
+
+        // ── Devices + language ──────────────────────────────────────
+        IconButton {
+            layout-order: root.rtl ? 1 : 6;
+            icon: Icons.headphones;
+            clicked => { root.devices-clicked(); }
+        }
+
+        lang-chip := Rectangle {
+            layout-order: root.rtl ? 0 : 7;
+            width: 48px;
+            height: 28px;
+            y: (parent.height - 28px) / 2;
+            border-radius: Tokens.radius-sm;
+            background: lang-touch.has-hover ? Tokens.bg-elevated-hover : transparent;
+            border-width: 1px;
+            border-color: Tokens.border-subtle;
+
+            lang-touch := TouchArea {
+                clicked => { root.toggle-language(); }
+            }
+
+            Text {
+                text: root.t-language;
+                color: Tokens.text-primary;
+                font-size: Tokens.font-size-small;
+                font-weight: 600;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                width: parent.width;
+                height: parent.height;
+            }
+        }
+    }
+}

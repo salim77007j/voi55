@@ -18,6 +18,7 @@
 
 use crate::AppWindow;
 use crate::DeviceItem;
+use crate::RulerTick;
 use crate::dialogs;
 use crate::i18n::{self, Lang};
 use crate::session::Session;
@@ -107,6 +108,12 @@ pub struct App {
     selected_input: RefCell<Option<String>>,
     /// User-picked output device (Phase 7.1).
     selected_output: RefCell<Option<String>>,
+    /// Drag selection on the waveform, in seconds `(start, end)` —
+    /// absolute project time (Phase 7.2 View menu / zoom-to-selection).
+    selection: RefCell<Option<(f64, f64)>>,
+    /// Master output volume 0..=1.5 (1.0 unity). Applied to the real
+    /// output callback; persisted across player reconnects.
+    volume: Cell<f32>,
 }
 
 impl App {
@@ -141,8 +148,14 @@ impl App {
             lang: Cell::new(Lang::En),
             selected_input: RefCell::new(None),
             selected_output: RefCell::new(None),
+            selection: RefCell::new(None),
+            volume: Cell::new(1.0),
         });
         *app.self_weak.borrow_mut() = Rc::downgrade(&app);
+
+        // LCD time display starts at zero (real idle state, no player).
+        app.window.set_time_cur("00:00:00.000".into());
+        app.window.set_time_total("00:00:00.000".into());
 
         // Install the English table (D1 default): strings, font, direction.
         app.apply_language(Lang::En);
@@ -316,6 +329,46 @@ impl App {
             }
         });
 
+        // Phase 7.2: menus, transport forward-seek, master volume,
+        // drag selection and the About dialog. Every entry maps to a
+        // command an existing control also exposes (No-Fake-UI).
+        let weak = Rc::downgrade(&app);
+        app.window.on_menu_action(move |id| {
+            if let Some(app) = weak.upgrade() {
+                app.menu_action(id);
+            }
+        });
+        let weak = Rc::downgrade(&app);
+        app.window.on_transport_forward(move || {
+            if let Some(app) = weak.upgrade() {
+                app.seek_relative(5.0);
+            }
+        });
+        let weak = Rc::downgrade(&app);
+        app.window.on_volume_changed(move |v| {
+            if let Some(app) = weak.upgrade() {
+                app.set_volume(v);
+            }
+        });
+        let weak = Rc::downgrade(&app);
+        app.window.on_wave_select(move |a, b| {
+            if let Some(app) = weak.upgrade() {
+                app.select_range(f64::from(a), f64::from(b));
+            }
+        });
+        let weak = Rc::downgrade(&app);
+        app.window.on_wave_zoom_range(move |a, b| {
+            if let Some(app) = weak.upgrade() {
+                app.zoom_to_selection(f64::from(a), f64::from(b));
+            }
+        });
+        let weak = Rc::downgrade(&app);
+        app.window.on_about_close(move || {
+            if let Some(app) = weak.upgrade() {
+                app.window.set_about_open(false);
+            }
+        });
+
         // UI poller: transport state, playhead and time readout.
         let weak = app.self_weak.borrow().clone();
         app.poll_timer.borrow_mut().start(
@@ -404,6 +457,34 @@ impl App {
         self.window.set_t_devices_refresh(t.devices_refresh.into());
         self.window.set_t_devices_none(t.devices_none.into());
         self.window.set_t_devices_close(t.devices_close.into());
+        // Professional UI (7.2): menus, toolbar, info strip.
+        self.window.set_t_menu_file(t.menu_file.into());
+        self.window.set_t_menu_view(t.menu_view.into());
+        self.window.set_t_menu_audio(t.menu_audio.into());
+        self.window.set_t_menu_help(t.menu_help.into());
+        self.window.set_t_mi_import(t.mi_import.into());
+        self.window.set_t_mi_export(t.mi_export.into());
+        self.window.set_t_mi_devices(t.mi_devices.into());
+        self.window.set_t_mi_zoom_in(t.mi_zoom_in.into());
+        self.window.set_t_mi_zoom_out(t.mi_zoom_out.into());
+        self.window.set_t_mi_fit(t.mi_fit.into());
+        self.window.set_t_mi_preview(t.mi_preview.into());
+        self.window.set_t_mi_zoom_sel(t.mi_zoom_sel.into());
+        self.window.set_t_mi_test_output(t.mi_test_output.into());
+        self.window.set_t_mi_about(t.mi_about.into());
+        self.window.set_t_toolbar_record(t.toolbar_record.into());
+        self.window.set_t_toolbar_import(t.toolbar_import.into());
+        self.window.set_t_toolbar_export(t.toolbar_export.into());
+        self.window.set_t_panel_track(t.panel_track.into());
+        self.window.set_t_panel_format(t.panel_format.into());
+        self.window.set_t_panel_analysis(t.panel_analysis.into());
+        self.window.set_t_cap_name(t.cap_name.into());
+        self.window.set_t_cap_rate(t.cap_rate.into());
+        self.window.set_t_cap_frames(t.cap_frames.into());
+        self.window.set_t_cap_domain(t.cap_domain.into());
+        self.window.set_t_cap_channels(t.cap_channels.into());
+        self.window.set_t_cap_f0(t.cap_f0.into());
+        self.window.set_t_cap_voiced(t.cap_voiced.into());
         self.recompose_base_status();
         self.compose_status(None);
         self.refresh();
@@ -680,10 +761,267 @@ impl App {
 
         self.window.set_has_audio(true);
         self.window.set_has_project(true);
+        // New project invalidates the old drag selection.
+        *self.selection.borrow_mut() = None;
+        self.window.set_sel_start_frac(-1.0);
+        self.window.set_sel_end_frac(-1.0);
+        self.sync_info_strip();
+        self.sync_status_segments();
         self.recompose_base_status();
         self.sync_param_ui();
+        self.sync_time_display(0.0);
         self.compose_status(None);
         self.refresh();
+    }
+
+    /// Pushes the loaded session's real values into the info strip
+    /// (No-Fake-UI): identity, format, pYIN analysis summary. Missing
+    /// values render as em-dashes in the strip.
+    fn sync_info_strip(&self) {
+        let guard = self.session.borrow();
+        let Some(s) = guard.as_ref() else {
+            self.window.set_info_name("".into());
+            self.window.set_info_rate("".into());
+            self.window.set_info_frames("".into());
+            self.window.set_info_domain("".into());
+            self.window.set_info_channels("".into());
+            self.window.set_info_f0("".into());
+            self.window.set_info_voiced("".into());
+            return;
+        };
+        let (f0, voiced) = match &s.track {
+            Some(track) => (
+                self.num(format!("{:.1} Hz", track.median_f0())),
+                self.num(format!("{:.0} %", track.voiced_ratio() * 100.0)),
+            ),
+            // Analysis skipped/failed: honest dash, not a fake number.
+            _ => ("\u{2014}".into(), "\u{2014}".into()),
+        };
+        self.window.set_info_name(s.name.clone().into());
+        self.window
+            .set_info_rate(self.num(format!("{} Hz", s.buffer.sample_rate())).into());
+        self.window
+            .set_info_frames(self.num(s.buffer.frames().to_string()).into());
+        self.window.set_info_domain("f32".into());
+        self.window
+            .set_info_channels(self.num(format!("{} ch", s.buffer.channels())).into());
+        self.window.set_info_f0(f0.into());
+        self.window.set_info_voiced(voiced.into());
+    }
+
+    /// Refreshes the status-bar segments from real state: file name,
+    /// buffer format, resolved device routing (explicit pick or the
+    /// resolve-chain default the engine will actually use).
+    fn sync_status_segments(&self) {
+        let guard = self.session.borrow();
+        if let Some(s) = guard.as_ref() {
+            self.window.set_seg_file(s.name.clone().into());
+            self.window.set_seg_format(
+                self.num(format!(
+                    "{} Hz \u{b7} f32 \u{b7} {} ch",
+                    s.buffer.sample_rate(),
+                    s.buffer.channels()
+                ))
+                .into(),
+            );
+        } else {
+            self.window.set_seg_file("".into());
+            self.window.set_seg_format("".into());
+        }
+        drop(guard);
+        let din = self.effective_input_name().unwrap_or_default();
+        let dout = self.effective_output_name().unwrap_or_default();
+        self.window.set_seg_in(din.into());
+        self.window.set_seg_out(dout.into());
+    }
+
+    /// Menu dispatch: File 0-9, View 10-19, Audio 20-29, Help 30-39.
+    fn menu_action(&self, id: i32) {
+        match id {
+            0 => self.import_clicked(),
+            1 => {
+                let open = !self.window.get_export_open();
+                self.window.set_export_open(open);
+            }
+            2 | 21 => {
+                let open = !self.window.get_devices_open();
+                self.window.set_devices_open(open);
+                if open {
+                    self.refresh_devices();
+                }
+            }
+            10 => self.zoom(1.6, 0.5),
+            11 => self.zoom(1.0 / 1.6, 0.5),
+            12 => self.fit(),
+            13 => self.toggle_preview(),
+            14 => {
+                // Zoom to the live selection (real view change).
+                let sel = *self.selection.borrow();
+                if let Some((a, b)) = sel {
+                    let mut borrowed = self.session.borrow_mut();
+                    if let Some(session) = borrowed.as_mut() {
+                        session.set_view_secs(a.min(b), a.max(b));
+                    }
+                    drop(borrowed);
+                    self.refresh();
+                }
+            }
+            20 => self.test_output(),
+            30 => self.window.set_about_open(true),
+            _ => {}
+        }
+    }
+
+    /// Seeks to an absolute position (seconds). The streaming path
+    /// restarts the preview worker at the target; the buffered path
+    /// jumps the player cursor. Silent no-op without a project.
+    fn seek_to(&self, secs: f64) {
+        let target = {
+            let guard = self.session.borrow();
+            let Some(s) = guard.as_ref() else {
+                return;
+            };
+            secs.clamp(0.0, s.duration_secs())
+        };
+        let live_active = self.live.borrow().is_some();
+        let frame = {
+            let guard = self.player.borrow();
+            let Some(player) = guard.as_ref() else {
+                return;
+            };
+            let (rate, _) = player.output_format();
+            (target * f64::from(rate)) as usize
+        };
+        if live_active {
+            // Streaming source: the worker re-renders from the target;
+            // the FIFO cursor (the player's position) jumps with it.
+            if let Some(live) = self.live.borrow().as_ref() {
+                live.restart(&self.params.get(), frame);
+            }
+        } else {
+            let guard = self.player.borrow();
+            if let Some(player) = guard.as_ref() {
+                let _ = player.seek_to_frame(frame);
+            }
+        }
+        self.set_playhead(target);
+        self.sync_time_display(target);
+    }
+
+    /// Forward seek relative to the current position (the FF transport
+    /// button). The to-start button keeps its existing stop+rewind.
+    fn seek_relative(&self, delta: f64) {
+        let pos = {
+            let guard = self.player.borrow();
+            let Some(player) = guard.as_ref() else {
+                return;
+            };
+            if player.transport() == mvl_audio::Transport::Stopped {
+                return;
+            }
+            player.position_secs()
+        };
+        self.seek_to(pos + delta);
+    }
+
+    /// Applies the master volume to the real output callback and keeps
+    /// the persisted value across reconnects.
+    fn set_volume(&self, v: f32) {
+        let v = v.clamp(0.0, 1.5);
+        self.volume.set(v);
+        self.window.set_volume(v);
+        if let Some(p) = self.player.borrow().as_ref() {
+            p.set_volume(v);
+        }
+    }
+
+    /// Drag selection: converts view fractions to absolute seconds and
+    /// publishes both the overlay and the selection readout.
+    fn select_range(&self, a: f64, b: f64) {
+        let guard = self.session.borrow();
+        let Some(s) = guard.as_ref() else {
+            return;
+        };
+        let (start, end) = s.view_secs();
+        let span = end - start;
+        let sa = start + a.clamp(0.0, 1.0) * span;
+        let sb = start + b.clamp(0.0, 1.0) * span;
+        drop(guard);
+        *self.selection.borrow_mut() = Some((sa.min(sb), sa.max(sb)));
+        self.window
+            .set_sel_start_frac(a.min(b).clamp(0.0, 1.0) as f32);
+        self.window
+            .set_sel_end_frac(a.max(b).clamp(0.0, 1.0) as f32);
+        let dur = (sa.max(sb) - sa.min(sb)).abs();
+        self.status(
+            self.t().status_selected,
+            &[("span", self.num(fmt_span(dur)))],
+        );
+    }
+
+    /// View-menu zoom-to-selection from raw fractions (same conversion
+    /// as [`Self::select_range`] but jumps the view window).
+    fn zoom_to_selection(&self, a: f64, b: f64) {
+        let guard = self.session.borrow();
+        let Some(s) = guard.as_ref() else {
+            return;
+        };
+        let (start, end) = s.view_secs();
+        let span = end - start;
+        let sa = start + a.clamp(0.0, 1.0) * span;
+        let sb = start + b.clamp(0.0, 1.0) * span;
+        drop(guard);
+        if (sa - sb).abs() < 1e-9 {
+            return;
+        }
+        let mut borrowed = self.session.borrow_mut();
+        if let Some(session) = borrowed.as_mut() {
+            session.set_view_secs(sa.min(sb), sa.max(sb));
+        }
+        drop(borrowed);
+        self.refresh();
+    }
+
+    /// Rebuilds the ruler tick model from the real view window (nice
+    /// steps of 1/2/5 decades; the same model drives the well grid).
+    fn sync_ruler(&self) {
+        let guard = self.session.borrow();
+        let Some(s) = guard.as_ref() else {
+            self.window.set_ruler_ticks(ModelRc::default());
+            self.window.set_grid_ticks(ModelRc::default());
+            return;
+        };
+        let (start, end) = s.view_secs();
+        drop(guard);
+        let span = end - start;
+        if span <= 0.0 {
+            self.window.set_ruler_ticks(ModelRc::default());
+            self.window.set_grid_ticks(ModelRc::default());
+            return;
+        }
+        // Nice step: 1-2-5 decades aiming for ~8 ticks.
+        let rough = span / 8.0;
+        let mag = 10f64.powf(rough.log10().floor());
+        let step = if rough / mag >= 5.0 {
+            5.0 * mag
+        } else if rough / mag >= 2.0 {
+            2.0 * mag
+        } else {
+            mag
+        };
+        let mut model = VecModel::default();
+        let mut t = (start / step).ceil() * step;
+        while t <= end + 1e-12 {
+            let frac = ((t - start) / span).clamp(0.0, 1.0) as f32;
+            model.push(RulerTick {
+                frac,
+                label: fmt_time(t).into(),
+            });
+            t += step;
+        }
+        let model = ModelRc::new(model);
+        self.window.set_ruler_ticks(model.clone());
+        self.window.set_grid_ticks(model);
     }
 
     /// Renders synchronously on the calling thread and installs the
@@ -1246,11 +1584,11 @@ impl App {
         if recording {
             if let Some(start) = *self.record_started.borrow() {
                 let secs = start.elapsed().as_secs_f64();
-                // The ● REC label follows the table; the clock is an LTR
-                // island in both languages.
-                self.window.set_time_readout(
-                    format!("\u{25cf} {} {}", self.t().record, self.num(fmt_time(secs))).into(),
-                );
+                // The LCD shows the real capture clock (LTR digits in
+                // both languages); the armed state shows in the toolbar
+                // and transport button.
+                self.window.set_time_cur(fmt_time(secs).into());
+                self.window.set_time_total("\u{2014}".into());
             }
             return;
         }
@@ -1279,11 +1617,22 @@ impl App {
             .as_ref()
             .map_or(0.0, |s| s.duration_secs());
         let pos = player.position_secs().min(duration);
-        let readout = self.num(format!("{} / {}", fmt_time(pos), fmt_time(duration)));
-        self.window.set_time_readout(readout.into());
+        self.sync_time_display(pos);
         if transport == mvl_audio::Transport::Playing {
             self.set_playhead(pos);
         }
+    }
+
+    /// Pushes the split LCD readout (current / total, mono digits, LTR
+    /// islands in both languages).
+    fn sync_time_display(&self, pos: f64) {
+        let duration = self
+            .session
+            .borrow()
+            .as_ref()
+            .map_or(0.0, |s| s.duration_secs());
+        self.window.set_time_cur(fmt_time(pos).into());
+        self.window.set_time_total(fmt_time(duration).into());
     }
 
     /// A/B view switch (waveform chip and `--preview`).
@@ -1350,6 +1699,8 @@ impl App {
 
         let Some(s) = session.as_mut() else {
             self.window.set_wave_image(Image::default());
+            drop(session);
+            self.sync_ruler();
             return;
         };
 
@@ -1408,6 +1759,8 @@ impl App {
         let span = fmt_span(b - a);
         self.window
             .set_zoom_label(format!("{} {}", t.view_label, self.num(span)).into());
+        drop(session);
+        self.sync_ruler();
     }
 
     fn zoom(&self, factor: f64, anchor: f64) {

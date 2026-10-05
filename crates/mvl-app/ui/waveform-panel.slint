@@ -2,13 +2,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // Waveform well: the microscopy view. Renders the pyramid image produced
-// by the Rust waveform engine, a playhead overlay, wheel-zoom / drag-pan,
-// and the zoom controls. The audio time axis stays left-to-right in both
-// languages (industry convention for DAW timelines; disclosed in the
-// phase report).
+// by the Rust waveform engine, a playhead overlay, the view grid, wheel-
+// zoom / drag-pan, drag-selection (Select mode) and the zoom controls.
+// The audio time axis stays left-to-right in both languages (industry
+// convention for DAW timelines; disclosed in the phase report).
 
 import { Tokens } from "tokens.slint";
 import { Icons, IconButton, ChipButton } from "icons.slint";
+import { RulerTick } from "time-ruler.slint";
 
 export component WaveformPanel inherits Rectangle {
     background: Tokens.bg-well;
@@ -30,6 +31,13 @@ export component WaveformPanel inherits Rectangle {
     in property <bool> preview-mode: false;
     in property <bool> can-preview: false;
     callback toggle-preview();
+    /// Vertical grid lines aligned with the ruler ticks.
+    in property <[RulerTick]> grid-ticks;
+    /// Selection (fractions of the view; start > end when absent).
+    in property <float> sel-start-frac: -1.0;
+    in property <float> sel-end-frac: -1.0;
+    /// Select-mode toggle state (drag = select instead of pan).
+    in-out property <bool> select-mode: false;
     /// Viewport size (read by Rust for image rendering).
     in-out property <length> view-width: root.width;
     in-out property <length> view-height: root.height;
@@ -38,8 +46,19 @@ export component WaveformPanel inherits Rectangle {
     callback zoom(factor: float, anchor-frac: float);
     callback pan(delta-frac: float);
     callback fit();
+    /// Drag selection (Select mode): start/end fractions of the view.
+    callback select(start-frac: float, end-frac: float);
     /// Physical pixel size of the image area changed → re-render.
     callback viewport-changed();
+
+    // ── Grid (behind the waveform image) ─────────────────────────────
+    for t in root.grid-ticks: Rectangle {
+        x: t.frac * (parent.width - 1px);
+        y: 0;
+        width: 1px;
+        height: parent.height;
+        background: Tokens.well-grid;
+    }
 
     // Image element whose geometry defines the drawing viewport.
     wf := Image {
@@ -54,7 +73,18 @@ export component WaveformPanel inherits Rectangle {
         changed height => { root.viewport-changed(); }
     }
 
-    // ── Playhead ─────────────────────────────────────────────────────
+    // ── Selection overlay (real range from Rust) ─────────────────────
+    if root.sel-start-frac >= 0.0 && root.sel-end-frac > root.sel-start-frac: Rectangle {
+        x: root.sel-start-frac * parent.width;
+        y: 0;
+        width: (root.sel-end-frac - root.sel-start-frac).clamp(0.0, 1.0) * parent.width;
+        height: parent.height;
+        background: rgba(0, 180, 216, 0.16);
+        border-width: 1px;
+        border-color: Tokens.accent-pitch;
+    }
+
+    // ── Playhead (task book: 1 px amber line) ────────────────────────
     if root.playhead-frac >= 0.0 && root.playhead-frac <= 1.0: Rectangle {
         x: root.playhead-frac * (parent.width - 1px);
         y: 0;
@@ -65,6 +95,7 @@ export component WaveformPanel inherits Rectangle {
 
     // ── Interaction surface ──────────────────────────────────────────
     property <length> last-pan-x: 0;
+    property <length> sel-origin-x: 0;
     touch := TouchArea {
         // Zoom with the wheel, anchored at the pointer.
         scroll-event(e) => {
@@ -75,16 +106,27 @@ export component WaveformPanel inherits Rectangle {
             }
             accept
         }
-        // Drag to pan.
-        moved => {
-            if (self.pressed) {
-                root.pan((root.last-pan-x - self.mouse-x) / parent.width);
-                root.last-pan-x = self.mouse-x;
-            }
-        }
         pointer-event(e) => {
             if (e.kind == PointerEventKind.down) {
                 root.last-pan-x = self.mouse-x;
+                if (root.select-mode) {
+                    root.sel-origin-x = self.mouse-x;
+                    // Restart a selection from the press point.
+                    root.select(self.mouse-x / parent.width, self.mouse-x / parent.width);
+                }
+            }
+        }
+        moved => {
+            if (self.pressed) {
+                if (root.select-mode) {
+                    root.select(
+                        root.sel-origin-x / parent.width,
+                        self.mouse-x / parent.width,
+                    );
+                } else {
+                    root.pan((root.last-pan-x - self.mouse-x) / parent.width);
+                    root.last-pan-x = self.mouse-x;
+                }
             }
         }
     }
@@ -110,12 +152,12 @@ export component WaveformPanel inherits Rectangle {
         opacity: 0.9;
     }
 
-    // ── Zoom controls (bottom-right corner, always LTR geometry) ────
+    // ── Zoom controls (bottom-right corner, always LTR geometry) ─────
     Rectangle {
         x: parent.width - self.width - Tokens.sp-1;
         y: parent.height - self.height - Tokens.sp-1;
-        // 4 buttons x 28 px + 3 spacings + padding (fixed, no loops).
-        width: 132px;
+        // 5 controls x 28 px + 4 spacings + padding (fixed, no loops).
+        width: 166px;
         height: 36px;
         border-radius: Tokens.radius-sm;
         background: Tokens.bg-scrim;
@@ -138,6 +180,11 @@ export component WaveformPanel inherits Rectangle {
             IconButton {
                 icon: Icons.fit;
                 clicked => { root.fit(); }
+            }
+            ChipButton {
+                label: "SEL";
+                active: root.select-mode;
+                clicked => { root.select-mode = !root.select-mode; }
             }
             ChipButton {
                 label: "A/B";

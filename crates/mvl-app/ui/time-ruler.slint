@@ -1,0 +1,45 @@
+// Copyright © salim77007j
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+// Time ruler (Phase 7.2): the timeline strip above the waveform well.
+// Ticks are computed by Rust from the real view window (start/span in
+// seconds) and rebuilt on every zoom/pan — the labels are genuine time
+// coordinates, not decoration. The audio time axis stays LTR in both
+// languages (DAW convention, disclosed in the phase report).
+
+import { Tokens } from "tokens.slint";
+
+export struct RulerTick {
+    /// Horizontal position as a fraction of the view width (0..1).
+    frac: float,
+    /// Formatted time label (LTR mono digits in both languages).
+    label: string,
+}
+
+export component TimeRuler inherits Rectangle {
+    height: 22px;
+    background: Tokens.bg-panel;
+    border-radius: Tokens.radius-sm;
+    border-width: 1px;
+    border-color: Tokens.border-subtle;
+    clip: true;
+
+    in property <[RulerTick]> ticks;
+
+    for t in root.ticks: Rectangle {
+        x: t.frac * parent.width;
+        y: 0;
+        width: 1px;
+        height: 7px;
+        background: Tokens.text-faint;
+
+        Text {
+            x: 3px;
+            y: 7px;
+            text: t.label;
+            color: Tokens.text-muted;
+            font-family: Tokens.font-mono;
+            font-size: 9px;
+        }
+    }
+}

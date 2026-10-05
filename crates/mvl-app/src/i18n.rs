@@ -94,6 +94,36 @@ pub struct StrTable {
     pub device_fallback: &'static str,
     /// Status: the output test tone played.
     pub status_test_played: &'static str,
+    // ── Professional UI (Phase 7.2) ─────────────────────────────
+    pub menu_file: &'static str,
+    pub menu_view: &'static str,
+    pub menu_audio: &'static str,
+    pub menu_help: &'static str,
+    pub mi_import: &'static str,
+    pub mi_export: &'static str,
+    pub mi_devices: &'static str,
+    pub mi_zoom_in: &'static str,
+    pub mi_zoom_out: &'static str,
+    pub mi_fit: &'static str,
+    pub mi_preview: &'static str,
+    pub mi_zoom_sel: &'static str,
+    pub mi_test_output: &'static str,
+    pub mi_about: &'static str,
+    pub toolbar_record: &'static str,
+    pub toolbar_import: &'static str,
+    pub toolbar_export: &'static str,
+    pub panel_track: &'static str,
+    pub panel_format: &'static str,
+    pub panel_analysis: &'static str,
+    pub cap_name: &'static str,
+    pub cap_rate: &'static str,
+    pub cap_frames: &'static str,
+    pub cap_domain: &'static str,
+    pub cap_channels: &'static str,
+    pub cap_f0: &'static str,
+    pub cap_voiced: &'static str,
+    /// Status: drag-selection created, `{span}` is the formatted span.
+    pub status_selected: &'static str,
 }
 
 pub const EN: StrTable = StrTable {
@@ -141,6 +171,34 @@ pub const EN: StrTable = StrTable {
     status_output_selected: "output device → {name}{fallback}",
     device_fallback: " (fell back — requested device unavailable)",
     status_test_played: "output test tone played on {name}",
+    menu_file: "File",
+    menu_view: "View",
+    menu_audio: "Audio",
+    menu_help: "Help",
+    mi_import: "Import audio file\u{2026}",
+    mi_export: "Export the render\u{2026}",
+    mi_devices: "Input / Output devices\u{2026}",
+    mi_zoom_in: "Zoom in",
+    mi_zoom_out: "Zoom out",
+    mi_fit: "Fit project",
+    mi_preview: "A/B preview",
+    mi_zoom_sel: "Zoom to selection",
+    mi_test_output: "Test output",
+    mi_about: "About Micro-Vocal Lab",
+    toolbar_record: "Record",
+    toolbar_import: "Import",
+    toolbar_export: "Export",
+    panel_track: "TRACK",
+    panel_format: "FORMAT",
+    panel_analysis: "ANALYSIS",
+    cap_name: "Name",
+    cap_rate: "Sample rate",
+    cap_frames: "Frames",
+    cap_domain: "Engine domain",
+    cap_channels: "Channels",
+    cap_f0: "Median F0",
+    cap_voiced: "Voiced",
+    status_selected: "selection {span}",
 };
 
 pub const AR: StrTable = StrTable {
@@ -188,6 +246,34 @@ pub const AR: StrTable = StrTable {
     status_output_selected: "جهاز المخرج ← {name}{fallback}",
     device_fallback: " (تحوّل تلقائي — الجهاز المطلوب غير متاح)",
     status_test_played: "تم تشغيل نغمة الاختبار على {name}",
+    menu_file: "ملف",
+    menu_view: "عرض",
+    menu_audio: "صوت",
+    menu_help: "مساعدة",
+    mi_import: "استيراد ملف صوتي\u{2026}",
+    mi_export: "تصدير المعالجة\u{2026}",
+    mi_devices: "أجهزة المدخل / المخرج\u{2026}",
+    mi_zoom_in: "تكبير",
+    mi_zoom_out: "تصغير",
+    mi_fit: "ملاءمة المشروع",
+    mi_preview: "معاينة A/B",
+    mi_zoom_sel: "تكبير إلى المحدد",
+    mi_test_output: "اختبار المخرج",
+    mi_about: "حول Micro-Vocal Lab",
+    toolbar_record: "تسجيل",
+    toolbar_import: "استيراد",
+    toolbar_export: "تصدير",
+    panel_track: "المسار",
+    panel_format: "الصيغة",
+    panel_analysis: "التحليل",
+    cap_name: "الاسم",
+    cap_rate: "معدل العينات",
+    cap_frames: "الإطارات",
+    cap_domain: "نطاق المحرك",
+    cap_channels: "القنوات",
+    cap_f0: "الوسط F0",
+    cap_voiced: "مصوّت",
+    status_selected: "تحديد {span}",
 };
 
 pub const AR_RECORD_CAP: &str = " (الجهاز محدود — 192 kHz غير متاح)";
@@ -283,6 +369,40 @@ mod tests {
             assert!(t.status_output_selected.contains("{name}"));
             assert!(t.status_test_played.contains("{name}"));
             assert!(!t.device_fallback.is_empty());
+            // Professional UI (7.2): menus/panels/captions exist in both
+            // tables; the selection template names its span placeholder.
+            for s72 in [
+                t.menu_file,
+                t.menu_view,
+                t.menu_audio,
+                t.menu_help,
+                t.mi_import,
+                t.mi_export,
+                t.mi_devices,
+                t.mi_zoom_in,
+                t.mi_zoom_out,
+                t.mi_fit,
+                t.mi_preview,
+                t.mi_zoom_sel,
+                t.mi_test_output,
+                t.mi_about,
+                t.toolbar_record,
+                t.toolbar_import,
+                t.toolbar_export,
+                t.panel_track,
+                t.panel_format,
+                t.panel_analysis,
+                t.cap_name,
+                t.cap_rate,
+                t.cap_frames,
+                t.cap_domain,
+                t.cap_channels,
+                t.cap_f0,
+                t.cap_voiced,
+            ] {
+                assert!(!s72.is_empty());
+            }
+            assert!(t.status_selected.contains("{span}"));
         }
         // Compile-time-checked invariants (clippy wants const blocks for
         // constant assertions — they are constants on purpose).

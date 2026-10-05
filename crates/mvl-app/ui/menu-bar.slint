@@ -1,0 +1,207 @@
+// Copyright © salim77007j
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+// Menu bar (Phase 7.2): compact DAW-style dropdown menus. Every item
+// carries an action id the Rust bridge maps to a real command the
+// toolbar/transport/panels also expose — No-Fake-UI: nothing is shown
+// that does nothing (the task book lists an Edit menu, but with no real
+// edit commands to attach it is omitted honestly; disclosed in the
+// phase report).
+//
+// Open-menu state lives at the bar level (`open-id`): clicking a button
+// opens its panel, clicking another button switches, and the AppWindow's
+// full-window scrim closes whichever is open. Deterministic in the
+// headless software renderer (no PopupWindow dependence).
+
+import { Tokens } from "tokens.slint";
+
+export struct MenuEntry {
+    label: string,
+    enabled: bool,
+    action-id: int,
+}
+
+// One dropdown row.
+component MenuRow inherits Rectangle {
+    height: 24px;
+    border-radius: Tokens.radius-sm;
+    background: touch.has-hover ? Tokens.bg-elevated-hover : transparent;
+
+    in property <MenuEntry> entry;
+    callback activated(int);
+
+    opacity: root.entry.enabled ? 1.0 : 0.4;
+
+    touch := TouchArea {
+        enabled: root.entry.enabled;
+        clicked => { root.activated(root.entry.action-id); }
+    }
+
+    Text {
+        x: Tokens.sp-1;
+        text: root.entry.label;
+        color: Tokens.text-primary;
+        font-size: Tokens.font-size-small;
+        vertical-alignment: center;
+    }
+}
+
+// A top-level menu button + its dropdown panel. `menu-id` is this
+// menu's slot in the bar's `open-id`; `open-id == 0` means all closed.
+component Menu inherits Rectangle {
+    width: btn-text.preferred-width + Tokens.sp-2;
+    height: root.bar-height;
+    background: touch.has-hover || root.open-id == self.menu-id
+        ? Tokens.bg-elevated-hover : transparent;
+
+    in property <string> label;
+    in property <int> menu-id;
+    in-out property <int> open-id: 0;
+    in property <length> bar-height: 26px;
+    in property <bool> rtl: false;
+    in property <[MenuEntry]> entries;
+    in property <length> panel-width: 210px;
+    callback activated(int);
+
+    property <bool> open: root.open-id == self.menu-id;
+
+    touch := TouchArea {
+        clicked => {
+            root.open-id = root.open ? 0 : root.menu-id;
+        }
+    }
+
+    btn-text := Text {
+        x: Tokens.sp-1;
+        text: root.label;
+        color: Tokens.text-primary;
+        font-size: Tokens.font-size-small;
+        vertical-alignment: center;
+    }
+
+    if root.open: Rectangle {
+        x: root.rtl ? self.width - root.panel-width : 0;
+        y: root.bar-height;
+        width: root.panel-width;
+        height: root.entries.length * 25px + 5px; // rows (24px+1px spacing) + padding
+        background: Tokens.bg-elevated;
+        border-width: 1px;
+        border-color: Tokens.border-strong;
+        border-radius: Tokens.radius-sm;
+
+        TouchArea { } // keep panel clicks from reaching the scrim
+
+        list := VerticalLayout {
+            padding: Tokens.sp-quarter;
+            spacing: 1px;
+
+            for entry in root.entries: MenuRow {
+                entry: entry;
+                activated(id) => {
+                    root.open-id = 0;
+                    root.activated(id);
+                }
+            }
+        }
+    }
+}
+
+// ── The bar itself ───────────────────────────────────────────────────
+// Four menus; entry ids are namespaced per menu (File 0-9, View 10-19,
+// Audio 20-29, Help 30-39 — see app.rs `menu_action`).
+export component MenuBar inherits Rectangle {
+    height: 26px;
+    background: Tokens.bg-elevated;
+
+    in property <bool> rtl: false;
+    // File
+    in property <string> t-file;
+    in property <string> t-import;
+    in property <string> t-export;
+    in property <string> t-devices;
+    // View
+    in property <string> t-view;
+    in property <string> t-zoom-in;
+    in property <string> t-zoom-out;
+    in property <string> t-fit;
+    in property <string> t-preview;
+    in property <string> t-zoom-sel;
+    in property <bool> can-preview: false;
+    in property <bool> has-selection: false;
+    // Audio
+    in property <string> t-audio;
+    in property <string> t-test-output;
+    in property <bool> has-project: false;
+    // Help
+    in property <string> t-help;
+    in property <string> t-about;
+
+    callback menu-action(int);
+    in-out property <int> open-id: 0;
+
+    HorizontalLayout {
+        padding-left: Tokens.sp-half;
+        spacing: 0;
+
+        file-menu := Menu {
+            layout-order: root.rtl ? 3 : 0;
+            bar-height: root.height;
+            rtl: root.rtl;
+            menu-id: 1;
+            open-id <=> root.open-id;
+            label: root.t-file;
+            entries: [
+                { label: root.t-import, enabled: true, action-id: 0 },
+                { label: root.t-export, enabled: root.has-project, action-id: 1 },
+                { label: root.t-devices, enabled: true, action-id: 2 },
+            ];
+            activated(id) => { root.menu-action(id); }
+        }
+
+        view-menu := Menu {
+            layout-order: root.rtl ? 2 : 1;
+            bar-height: root.height;
+            rtl: root.rtl;
+            menu-id: 2;
+            open-id <=> root.open-id;
+            label: root.t-view;
+            entries: [
+                { label: root.t-zoom-in, enabled: true, action-id: 10 },
+                { label: root.t-zoom-out, enabled: true, action-id: 11 },
+                { label: root.t-fit, enabled: true, action-id: 12 },
+                { label: root.t-preview, enabled: root.can-preview, action-id: 13 },
+                { label: root.t-zoom-sel, enabled: root.has-selection, action-id: 14 },
+            ];
+            activated(id) => { root.menu-action(id); }
+        }
+
+        audio-menu := Menu {
+            layout-order: root.rtl ? 1 : 2;
+            bar-height: root.height;
+            rtl: root.rtl;
+            menu-id: 3;
+            open-id <=> root.open-id;
+            label: root.t-audio;
+            entries: [
+                { label: root.t-test-output, enabled: true, action-id: 20 },
+                { label: root.t-devices, enabled: true, action-id: 21 },
+            ];
+            activated(id) => { root.menu-action(id); }
+        }
+
+        help-menu := Menu {
+            layout-order: root.rtl ? 0 : 3;
+            bar-height: root.height;
+            rtl: root.rtl;
+            menu-id: 4;
+            open-id <=> root.open-id;
+            label: root.t-help;
+            entries: [
+                { label: root.t-about, enabled: true, action-id: 30 },
+            ];
+            activated(id) => { root.menu-action(id); }
+        }
+
+        Rectangle { layout-order: root.rtl ? -1 : 9; } // spring (outer edge)
+    }
+}

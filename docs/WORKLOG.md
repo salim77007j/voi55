@@ -351,3 +351,43 @@ style — analyzed, becomes the 7.2 visual target).
   knob control strips d) real metering (output tap, volume, seek,
   DSP duty) e) real-FFT spectrum analyzer f) i18n+status metrics+RTL
   audit g) evidence + PHASE_7_2_REPORT. Commit per sub-item.
+
+## 2026-10-05 — Phase 7.2a+7.2b: tokens/fonts/palette + full layout rebuild
+
+- **7.2a (e00fcca)**: "Studio Console" tokens (task-book palette + reference
+  chrome language); IBM Plex Sans/Mono added (3 weights each + OFL), Inter
+  removed; waveform rasterizer gains a vertical cyan→coral peak gradient
+  (lerp per row), amber 1px playhead, voiced tint softened; screenshot
+  test constants re-pinned to the new spec.
+- **7.2b (this commit)**: appwindow rebuilt to the task-book layout —
+  - menu bar (File/View/Audio/Help; Edit omitted honestly — no real edit
+    commands exist; every entry dispatches a real command: import/export/
+    devices/zoom/fit/A-B/zoom-to-selection/test-output/about), dropdown
+    panels with explicit open-id state (no PopupWindow; deterministic in
+    the headless renderer), RTL mirrors via layout-order incl. spring.
+  - toolbar: brand block + Record/Import/Export icon-caption actions +
+    devices + language chip (same real callbacks).
+  - three-column body: info rail (TRACK/FORMAT/ANALYSIS panels fed from
+    the real session: name/rate/frames/f32 domain/channels/median F0/
+    voiced %; em-dash when analysis missing), time ruler (nice 1-2-5
+    steps from the real view span; the same tick model draws the well
+    grid), waveform well; right column keeps PrecisionSliders until 7.2c.
+  - drag selection (SEL mode chip → select callback → overlay + duration
+    status) and View→"Zoom to selection" (real set_view_secs).
+  - transport: colored buttons (amber rewind-to-start, 56px green play,
+    stop, red record with pulse, amber FF +5s), LCD time display (split
+    current/total, IBM Plex Mono, "PROJECT TIME" engineering label),
+    MASTER volume slider wired to a real output gain, L/R meters (honest
+    silence until the 7.2d tap lands).
+  - status bar segments: engine line | file | format | IN device | OUT
+    device — all fed from real state; empty segments hide.
+  - mvl-audio: Player::set_volume/volume (atomic f32 bits, applied in
+    the callback post-mapping pre-conversion, clamp ±1.0), Player::
+    seek_to_frame (buffered source; streaming seeks via PreviewStream::
+    restart), apply_volume extracted + unit-tested (scale/clamp/mute).
+  - App: menu_action dispatch, seek_to/seek_relative (streaming vs
+    buffered paths), volume persistence across reconnects, selection in
+    project seconds, ruler model rebuild in refresh(), LCD init at zero.
+- Evidence: ui72b-layout-en.png, ui72b-layout-ar-devices.png (full RTL
+  mirror incl. menus/transport/status), ui72b-layout-export.png.
+- Tests: 120 app+audio green (volume tests added), fmt+clippy clean.

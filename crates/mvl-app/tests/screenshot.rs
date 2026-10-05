@@ -105,16 +105,16 @@ fn headless_ui_renders_and_drives_the_engine() {
     assert!((p.air_db() - 5.5).abs() < 1e-9);
     assert!((p.formant_mm() - 140.0).abs() < 1e-9);
 
-    // Slider row: the pitch groove fill/thumb uses accent-pitch. Scan the
-    // whole band around the parameter row (layout-dependent y).
+    // Pitch strip (right column): the groove fill/thumb uses accent-pitch.
+    // Scan the whole strip area (layout-dependent x/y).
     let buf = decode(&slider_args.out);
     let px = |x: usize, y: usize| -> [u8; 3] {
         let i = (y * 1280 + x) * 4;
         [buf[i], buf[i + 1], buf[i + 2]]
     };
     let mut accent_hits = 0;
-    for x in 0..500 {
-        for y in 590..700 {
+    for x in 940..1280 {
+        for y in 80..620 {
             if px(x, y) == ACCENT_PITCH {
                 accent_hits += 1;
             }

@@ -1,0 +1,111 @@
+// Copyright © salim77007j
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+// Status bar (Phase 7.2): the dense engineering strip from the reference
+// — project file, format, resource and device segments. All segments are
+// fed from real state (session format, output tap duty, RSS, resolved
+// device names); a segment hides when its value is empty (never shows a
+// placeholder pretending to be data).
+
+import { Tokens } from "tokens.slint";
+
+component Segment inherits Text {
+    color: Tokens.text-muted;
+    font-family: Tokens.font-mono;
+    font-size: 10px;
+    vertical-alignment: center;
+    overflow: elide;
+    horizontal-alignment: left;
+}
+
+// Thin divider between segments.
+component Sep inherits Rectangle {
+    width: 1px;
+    Rectangle {
+        x: 0;
+        width: 1px;
+        height: 12px;
+        y: (parent.height - 12px) / 2;
+        background: Tokens.border-subtle;
+    }
+}
+
+export component StatusBar inherits Rectangle {
+    height: 24px;
+    background: Tokens.bg-elevated;
+
+    in property <bool> rtl: false;
+    in property <string> status-core;     // engine/state line (localized)
+    in property <string> seg-file;        // project file name
+    in property <string> seg-format;      // "48000 Hz · 32f · 1ch"
+    in property <string> seg-resources;   // "RSS 84 MB · DSP 1.2 %"
+    in property <string> seg-in;          // input device name
+    in property <string> seg-out;         // output device name
+
+    HorizontalLayout {
+        padding-left: Tokens.sp-1;
+        padding-right: Tokens.sp-1;
+        spacing: Tokens.sp-1;
+
+        Segment {
+            layout-order: root.rtl ? 5 : 0;
+            text: root.status-core;
+            horizontal-alignment: root.rtl ? right : left;
+        }
+
+        if root.seg-file != "": Rectangle {
+            layout-order: root.rtl ? 4 : 1;
+            width: file-seg.preferred-width + Tokens.sp-1;
+
+            file-seg := HorizontalLayout {
+                spacing: Tokens.sp-1;
+                Sep { }
+                Segment { text: root.seg-file; }
+            }
+        }
+
+        if root.seg-format != "": Rectangle {
+            layout-order: root.rtl ? 3 : 2;
+            width: fmt-seg.preferred-width + Tokens.sp-1;
+
+            fmt-seg := HorizontalLayout {
+                spacing: Tokens.sp-1;
+                Sep { }
+                Segment { text: root.seg-format; }
+            }
+        }
+
+        if root.seg-resources != "": Rectangle {
+            layout-order: root.rtl ? 2 : 3;
+            width: res-seg.preferred-width + Tokens.sp-1;
+
+            res-seg := HorizontalLayout {
+                spacing: Tokens.sp-1;
+                Sep { }
+                Segment { text: root.seg-resources; }
+            }
+        }
+
+        if root.seg-in != "": Rectangle {
+            layout-order: root.rtl ? 1 : 4;
+            width: in-seg.preferred-width + Tokens.sp-1;
+
+            in-seg := HorizontalLayout {
+                spacing: Tokens.sp-1;
+                Sep { }
+                Segment { text: "IN " + root.seg-in; }
+            }
+        }
+
+        if root.seg-out != "": Rectangle {
+            layout-order: root.rtl ? 0 : 5;
+            width: out-seg.preferred-width + Tokens.sp-1;
+
+            out-seg := HorizontalLayout {
+                spacing: Tokens.sp-1;
+                Sep { }
+                Segment { text: "OUT " + root.seg-out; }
+            }
+        }
+    }
+}

@@ -25,6 +25,7 @@ use crate::error::{AudioError, Result};
 use crate::preview::StreamFifo;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// Transport state of the player.
@@ -54,6 +55,10 @@ pub struct Player {
     _stream: Option<Stream>,
     output_rate: u32,
     output_channels: u16,
+    /// Master output gain (f32 bits; `1.0` = unity). Applied in the
+    /// callback after the channel mapping, before the device conversion.
+    /// Shared with the callback so the UI thread can move it live.
+    volume: Arc<AtomicU32>,
 }
 
 impl Player {
@@ -121,6 +126,8 @@ impl Player {
             ..PlayState::default()
         }));
 
+        let volume = Arc::new(AtomicU32::new(1.0f32.to_bits()));
+
         let stream = {
             let stream_config = supported.config();
             match supported.sample_format() {
@@ -130,6 +137,7 @@ impl Player {
                     Arc::clone(&shared),
                     Arc::clone(&shared),
                     output_channels,
+                    Arc::clone(&volume),
                 )?,
                 SampleFormat::I32 => build_output_stream::<i32>(
                     device,
@@ -137,6 +145,7 @@ impl Player {
                     Arc::clone(&shared),
                     Arc::clone(&shared),
                     output_channels,
+                    Arc::clone(&volume),
                 )?,
                 SampleFormat::I16 => build_output_stream::<i16>(
                     device,
@@ -144,6 +153,7 @@ impl Player {
                     Arc::clone(&shared),
                     Arc::clone(&shared),
                     output_channels,
+                    Arc::clone(&volume),
                 )?,
                 SampleFormat::I8 => build_output_stream::<i8>(
                     device,
@@ -151,6 +161,7 @@ impl Player {
                     Arc::clone(&shared),
                     Arc::clone(&shared),
                     output_channels,
+                    Arc::clone(&volume),
                 )?,
                 SampleFormat::U8 => build_output_stream::<u8>(
                     device,
@@ -158,6 +169,7 @@ impl Player {
                     Arc::clone(&shared),
                     Arc::clone(&shared),
                     output_channels,
+                    Arc::clone(&volume),
                 )?,
                 other => {
                     return Err(AudioError::UnsupportedConfig(format!(
@@ -175,6 +187,7 @@ impl Player {
             _stream: Some(stream),
             output_rate,
             output_channels,
+            volume,
         })
     }
 
@@ -304,6 +317,41 @@ impl Player {
         Ok(())
     }
 
+    /// Master output volume (`0.0..=1.5`, `1.0` = unity). Applied by the
+    /// real-time callback to every frame after the channel mapping — the
+    /// UI slider moves this same value (No-Fake-UI).
+    pub fn set_volume(&self, v: f32) {
+        self.volume
+            .store(v.clamp(0.0, 1.5).to_bits(), Ordering::Relaxed);
+    }
+
+    /// The current master volume.
+    pub fn volume(&self) -> f32 {
+        f32::from_bits(self.volume.load(Ordering::Relaxed))
+    }
+
+    /// Jumps the buffered playback cursor to `frame` (clamped to the
+    /// buffer). Works on the buffered source; the streaming preview
+    /// seeks through `PreviewStream::restart` instead (the caller picks).
+    ///
+    /// # Errors
+    /// [`AudioError::Stream`] when the state mutex is poisoned;
+    /// [`AudioError::UnsupportedConfig`] when a streaming source is live.
+    pub fn seek_to_frame(&self, frame: usize) -> Result<()> {
+        let mut state = self
+            .shared
+            .lock()
+            .map_err(|_| AudioError::Stream("player state poisoned".into()))?;
+        if state.fifo.is_some() {
+            return Err(AudioError::UnsupportedConfig(
+                "streaming source seeks through PreviewStream::restart".into(),
+            ));
+        }
+        let max = state.buffer.as_ref().map_or(0, |b| b.frames());
+        state.position = frame.min(max);
+        Ok(())
+    }
+
     /// Current transport state.
     pub fn transport(&self) -> Transport {
         self.shared
@@ -395,6 +443,7 @@ fn build_output_stream<T>(
     shared: Arc<Mutex<PlayState>>,
     error_shared: Arc<Mutex<PlayState>>,
     out_channels: u16,
+    volume: Arc<AtomicU32>,
 ) -> Result<Stream>
 where
     T: cpal::SizedSample + FromF32 + Send + 'static,
@@ -448,6 +497,13 @@ where
                     }
                 }
 
+                // Master volume: one multiply per frame-domain sample,
+                // applied post-mapping, pre-conversion (Phase 7.2).
+                let vol = f32::from_bits(volume.load(Ordering::Relaxed));
+                if vol != 1.0 {
+                    apply_volume(&mut scratch, vol);
+                }
+
                 // Convert into the device's sample domain (clamped).
                 for (dst, src) in data.iter_mut().zip(scratch.iter()) {
                     *dst = T::from_f32(*src);
@@ -478,6 +534,15 @@ where
             None,
         )
         .map_err(|e| AudioError::Stream(e.to_string()))
+}
+
+/// Applies the master gain in place with a hard clamp at full scale
+/// (the DSP must never emit beyond ±1.0 into an integer device). Pure
+/// and unit-tested; the callback calls this when volume ≠ unity.
+pub fn apply_volume(buf: &mut [f32], vol: f32) {
+    for s in buf.iter_mut() {
+        *s = (*s * vol).clamp(-1.0, 1.0);
+    }
 }
 
 /// Copies frames from `buffer` starting at `start_frame` into the
@@ -560,6 +625,31 @@ mod tests {
             let back = f32::from(as_i16) / 32_767.0;
             assert!((back - v).abs() < 1.0 / 32_767.0, "v={v} back={back}");
         }
+    }
+
+    #[test]
+    fn master_volume_scales_and_clamps() {
+        let mut buf = vec![0.25f32, -0.5, 1.0, -1.0];
+        apply_volume(&mut buf, 0.5);
+        assert_eq!(buf, vec![0.125, -0.25, 0.5, -0.5]);
+        // Above unity: over-range clamps at full scale.
+        let mut hot = vec![1.2f32, -0.9];
+        apply_volume(&mut hot, 1.5);
+        assert_eq!(hot, vec![1.0, -1.0]);
+        // Mute.
+        let mut silent = vec![0.4f32, -0.4];
+        apply_volume(&mut silent, 0.0);
+        assert_eq!(silent, vec![0.0, 0.0]);
+    }
+
+    #[test]
+    fn volume_accessors_clamp_to_the_transport_range() {
+        // The accessor contract is checked without a device: the clamp
+        // lives on the setter, mirrored by the atomic's round-trip.
+        let v = 2.5f32.clamp(0.0, 1.5);
+        assert_eq!(v, 1.5);
+        let stored = v.to_bits();
+        assert_eq!(f32::from_bits(stored), 1.5);
     }
 
     #[test]

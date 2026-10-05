@@ -3,16 +3,27 @@
 
 // Micro-Vocal Lab — root window.
 //
-// Phase 4.1 skeleton: Studio Graphite shell with the header, the waveform
-// well (populated by the waveform engine in 4.2) and the status bar.
-// Fonts are embedded at compile time from `assets/fonts` (D12): Inter for
-// the Latin UI, IBM Plex Sans Arabic for the RTL/Arabic UI (4.5).
+// Phase 7.2 professional rebuild ("Studio Console"): menu bar, toolbar,
+// the three-column body (track info rail / waveform well with ruler /
+// engine control column), the studio transport with LCD time display,
+// and the segmented engineering status bar. Fonts are embedded at compile
+// time from `assets/fonts` (task book: IBM Plex Sans / Arabic / Mono).
+//
+// RTL: Slint shapes Arabic/bidi text but does not mirror layouts; every
+// row binds its children's `layout-order` to the `rtl` flag. The audio
+// time axis and the transport keep LTR geometry (industry convention;
+// disclosed in the phase report).
 
 import { Tokens } from "tokens.slint";
 import { WaveformPanel } from "waveform-panel.slint";
+import { TimeRuler, RulerTick } from "time-ruler.slint";
 import { PrecisionSlider } from "precision-slider.slint";
 import { Icons, IconButton, ChipButton } from "icons.slint";
 import { TransportBar } from "transport-bar.slint";
+import { MenuBar } from "menu-bar.slint";
+import { Toolbar } from "toolbar.slint";
+import { InfoStrip } from "info-strip.slint";
+import { StatusBar } from "status-bar.slint";
 
 import "../../../assets/fonts/IBMPlexSans-Regular.ttf";
 import "../../../assets/fonts/IBMPlexSans-Medium.ttf";
@@ -42,16 +53,13 @@ export component AppWindow inherits Window {
     default-font-size: Tokens.font-size-body;
 
     // ── Runtime state surfaced from Rust ─────────────────────────────
-    // UI font family (Inter for LTR English, IBM Plex Sans Arabic for
-    // RTL Arabic — switched by the i18n layer, sub-item 4.5).
+    // UI font family (IBM Plex Sans for LTR English, IBM Plex Sans
+    // Arabic for RTL Arabic — switched by the i18n layer).
     in property <string> ui-font: Tokens.font-latin;
     // Layout direction flag: false = LTR (English), true = RTL (Arabic).
-    // Slint 1.18 shapes bidi/Arabic text natively but does NOT mirror
-    // layouts automatically; every container binds its children's
-    // `layout-order` to this flag (see Tokens.rtl — sub-item 4.5).
     in property <bool> rtl: false;
 
-    // Localized strings (populated from the Rust i18n table, 4.5).
+    // Localized strings (populated from the Rust i18n table).
     in property <string> t-title;
     in property <string> t-waveform-empty;
     // App version, set from Cargo metadata by the Rust bridge.
@@ -73,12 +81,20 @@ export component AppWindow inherits Window {
     callback wave-pan(delta-frac: float);
     callback wave-fit();
     callback wave-viewport-changed();
+    // Drag selection (fractions of the visible span).
+    in-out property <float> sel-start-frac: -1.0;
+    in-out property <float> sel-end-frac: -1.0;
+    callback wave-select(start-frac: float, end-frac: float);
+    callback wave-zoom-range(start-frac: float, end-frac: float);
+    // Ruler ticks (real time coordinates, rebuilt on zoom/pan) and the
+    // grid lines inside the well (same model).
+    in property <[RulerTick]> ruler-ticks;
+    in property <[RulerTick]> grid-ticks;
     // Viewport size of the waveform panel (two-way from the panel).
     out property <length> view-width <=> wfpanel.view-width;
     out property <length> view-height <=> wfpanel.view-height;
 
-    // ── Engine parameters (the three sliders, brief §B) ──────────
-    // Values echo the canonical snapped grid from EngineParams.
+    // ── Engine parameters (the three strips, brief §B) ───────────
     in property <bool> has-project: false;
     in-out property <float> pitch-value;
     in-out property <float> air-value;
@@ -89,7 +105,7 @@ export component AppWindow inherits Window {
     callback pitch-changed(float);
     callback air-changed(float);
     callback formant-changed(float);
-    // Slider labels (i18n, 4.5).
+    // Strip labels (i18n).
     in property <string> t-pitch;
     in property <string> t-air;
     in property <string> t-formant;
@@ -105,7 +121,9 @@ export component AppWindow inherits Window {
     callback export-confirm();
     in property <bool> playing: false;
     in property <bool> recording: false;
-    in property <string> time-readout;
+    // Split LCD readouts (mono digits, LTR in both languages).
+    in property <string> time-cur;
+    in property <string> time-total;
     in property <string> t-record;
     in property <string> t-export-title;
     in property <string> t-export-go;
@@ -115,7 +133,63 @@ export component AppWindow inherits Window {
     callback play-pause();
     callback transport-stop();
     callback transport-rewind();
+    callback transport-forward();
     callback record-toggle();
+    // Master output volume 0..1.5 (1.0 = unity) — real output gain.
+    in-out property <float> volume: 1.0;
+    callback volume-changed(float);
+    // Live output meters 0..1 (post-render tap; silence while stopped).
+    in property <float> meter-l: 0.0;
+    in property <float> meter-r: 0.0;
+    in property <float> peak-l: 0.0;
+    in property <float> peak-r: 0.0;
+
+    // ── Menus (every entry maps to a real command) ──────────────────
+    in property <string> t-menu-file;
+    in property <string> t-menu-view;
+    in property <string> t-menu-audio;
+    in property <string> t-menu-help;
+    in property <string> t-mi-import;
+    in property <string> t-mi-export;
+    in property <string> t-mi-devices;
+    in property <string> t-mi-zoom-in;
+    in property <string> t-mi-zoom-out;
+    in property <string> t-mi-fit;
+    in property <string> t-mi-preview;
+    in property <string> t-mi-zoom-sel;
+    in property <string> t-mi-test-output;
+    in property <string> t-mi-about;
+    in property <string> t-toolbar-record;
+    in property <string> t-toolbar-import;
+    in property <string> t-toolbar-export;
+    callback menu-action(int);
+    in-out property <int> menu-open-id <=> menubar.open-id;
+
+    // ── Info strip (left rail, real session data) ───────────────────
+    in property <string> t-panel-track;
+    in property <string> t-panel-format;
+    in property <string> t-panel-analysis;
+    in property <string> t-cap-name;
+    in property <string> t-cap-rate;
+    in property <string> t-cap-frames;
+    in property <string> t-cap-domain;
+    in property <string> t-cap-channels;
+    in property <string> t-cap-f0;
+    in property <string> t-cap-voiced;
+    in property <string> info-name;
+    in property <string> info-rate;
+    in property <string> info-domain;
+    in property <string> info-channels;
+    in property <string> info-frames;
+    in property <string> info-f0;
+    in property <string> info-voiced;
+
+    // ── Status bar segments ─────────────────────────────────────────
+    in property <string> seg-file;
+    in property <string> seg-format;
+    in property <string> seg-resources;
+    in property <string> seg-in;
+    in property <string> seg-out;
 
     // ── Devices dialog (Phase 7.1) ─────────────────────────────
     in property <bool> devices-open: false;
@@ -135,240 +209,240 @@ export component AppWindow inherits Window {
     callback test-output();
     callback devices-close();
 
+    // ── About dialog (Help menu) ─────────────────────────────────────
+    in property <bool> about-open: false;
+    callback about-close();
+
     VerticalLayout {
         spacing: 0;
         padding: 0;
 
-        // ── Header (bg/elevated, 56 px) ─────────────────────────────
-        Rectangle {
-            height: 56px;
-            background: Tokens.bg-elevated;
-
-            HorizontalLayout {
-                padding-left: Tokens.sp-2;
-                padding-right: Tokens.sp-2;
-                spacing: Tokens.sp-1;
-
-                // Brand mark: rounded accent square.
-                Rectangle {
-                    layout-order: root.rtl ? 6 : 0;
-                    width: 24px;
-                    height: 24px;
-                    y: (parent.height - self.height) / 2;
-                    border-radius: Tokens.radius-sm;
-                    background: Tokens.accent-pitch;
-                }
-
-                Text {
-                    layout-order: root.rtl ? 5 : 1;
-                    text: "Micro-Vocal Lab";
-                    font-weight: 600;
-                    color: Tokens.text-primary;
-                    vertical-alignment: center;
-                }
-
-                Text {
-                    layout-order: root.rtl ? 4 : 2;
-                    text: root.t-version;
-                    color: Tokens.text-muted;
-                    vertical-alignment: center;
-                }
-
-                Rectangle { layout-order: 3; } // spring
-
-                devbtn := IconButton {
-                    layout-order: root.rtl ? 3 : 3;
-                    icon: Icons.headphones;
-                    enabled: true;
-                    active: root.devices-open;
-                    clicked => { root.devices-toggle(); }
-                }
-
-                langbtn := ChipButton {
-                    layout-order: root.rtl ? 2 : 4;
-                    label: root.t-language;
-                    chip-width: 52px;
-                    clicked => { root.toggle-language(); }
-                }
-
-                IconButton {
-                    layout-order: root.rtl ? 1 : 5;
-                    icon: Icons.import;
-                    enabled: true;
-                    clicked => { root.import-clicked(); }
-                }
-
-                expbtn := IconButton {
-                    layout-order: root.rtl ? 0 : 6;
-                    icon: Icons.export;
-                    enabled: root.has-project;
-                    clicked => { root.export-clicked(); }
-                }
-            }
+        // ── Menu bar (26 px) ────────────────────────────────────────
+        menubar := MenuBar {
+            rtl: root.rtl;
+            t-file: root.t-menu-file;
+            t-view: root.t-menu-view;
+            t-audio: root.t-menu-audio;
+            t-help: root.t-menu-help;
+            t-import: root.t-mi-import;
+            t-export: root.t-mi-export;
+            t-devices: root.t-mi-devices;
+            t-zoom-in: root.t-mi-zoom-in;
+            t-zoom-out: root.t-mi-zoom-out;
+            t-fit: root.t-mi-fit;
+            t-preview: root.t-mi-preview;
+            t-zoom-sel: root.t-mi-zoom-sel;
+            t-test-output: root.t-mi-test-output;
+            t-about: root.t-mi-about;
+            can-preview: root.can-preview;
+            has-project: root.has-project;
+            has-selection: root.sel-start-frac >= 0.0;
+            menu-action(id) => { root.menu-action(id); }
         }
 
-        Rectangle {
-            height: 1px;
-            background: Tokens.border-subtle;
+        Rectangle { height: 1px; background: Tokens.border-subtle; }
+
+        // ── Toolbar (44 px) ─────────────────────────────────────────
+        Toolbar {
+            rtl: root.rtl;
+            t-version: root.t-version;
+            t-record: root.t-toolbar-record;
+            t-import: root.t-toolbar-import;
+            t-export: root.t-toolbar-export;
+            t-language: root.t-language;
+            has-project: root.has-project;
+            recording: root.recording;
+            record-clicked() => { root.record-toggle(); }
+            import-clicked() => { root.import-clicked(); }
+            export-clicked() => { root.export-clicked(); }
+            devices-clicked() => { root.devices-toggle(); }
+            toggle-language() => { root.toggle-language(); }
         }
 
-        // ── Waveform well (fills the body) ──────────────────────────
+        Rectangle { height: 1px; background: Tokens.border-subtle; }
+
+        // ── Body: three columns ─────────────────────────────────────
         Rectangle {
-            background: Tokens.bg-base;
-
-            VerticalLayout {
-                padding: Tokens.sp-2;
-                spacing: Tokens.sp-1;
-
-                wfpanel := WaveformPanel {
-                    wave-image: root.wave-image;
-                    has-audio: root.has-audio;
-                    t-empty: root.t-waveform-empty;
-                    track-label: root.track-label;
-                    zoom-label: root.zoom-label;
-                    playhead-frac: root.playhead-frac;
-                    preview-mode: root.preview-mode;
-                    can-preview: root.can-preview;
-                    toggle-preview() => { root.toggle-preview(); }
-                    zoom(f, a) => { root.wave-zoom(f, a); }
-                    pan(d) => { root.wave-pan(d); }
-                    fit() => { root.wave-fit(); }
-                    viewport-changed() => { root.wave-viewport-changed(); }
-                }
-            }
-        }
-
-        Rectangle {
-            height: 1px;
-            background: Tokens.border-subtle;
-        }
-
-        // ── Parameter row: the three precision sliders (brief §B) ────
-        // Order note: the row is declared pitch → air → formant; in RTL
-        // each slider's layout-order mirrors the whole row (4.5).
-        Rectangle {
-            height: 108px;
             background: Tokens.bg-base;
 
             HorizontalLayout {
                 padding: Tokens.sp-1;
                 spacing: Tokens.sp-1;
 
-                pitch := PrecisionSlider {
+                // Left rail: track / format / analysis (15 %).
+                InfoStrip {
                     layout-order: root.rtl ? 2 : 0;
-                    label: root.t-pitch;
+                    width: 200px;
                     rtl: root.rtl;
-                    unit: "st";
-                    min: -12.0;
-                    max: 12.0;
-                    step: 0.01;
-                    coarse-step: 1.0;
-                    neutral: 0.0;
-                    accent: Tokens.accent-pitch;
-                    readout: root.pitch-readout;
-                    enabled: root.has-project;
-                    value <=> root.pitch-value;
-                    changed(v) => { root.pitch-changed(v); }
+                    t-track-panel: root.t-panel-track;
+                    t-format-panel: root.t-panel-format;
+                    t-analysis-panel: root.t-panel-analysis;
+                    t-name: root.t-cap-name;
+                    t-rate: root.t-cap-rate;
+                    t-domain: root.t-cap-domain;
+                    t-channels: root.t-cap-channels;
+                    t-f0: root.t-cap-f0;
+                    t-voiced: root.t-cap-voiced;
+                    t-frames: root.t-cap-frames;
+                    info-name: root.info-name;
+                    info-rate: root.info-rate;
+                    info-domain: root.info-domain;
+                    info-channels: root.info-channels;
+                    info-frames: root.info-frames;
+                    info-f0: root.info-f0;
+                    info-voiced: root.info-voiced;
                 }
 
-                air := PrecisionSlider {
-                    layout-order: root.rtl ? 1 : 1;
-                    label: root.t-air;
-                    rtl: root.rtl;
-                    unit: "dB";
-                    min: -24.0;
-                    max: 12.0;
-                    step: 0.1;
-                    coarse-step: 1.0;
-                    neutral: 0.0;
-                    accent: Tokens.accent-air;
-                    readout: root.air-readout;
-                    enabled: root.has-project;
-                    value <=> root.air-value;
-                    changed(v) => { root.air-changed(v); }
+                // Center: ruler + waveform well (fills).
+                Rectangle {
+                    layout-order: 1;
+
+                    VerticalLayout {
+                        spacing: Tokens.sp-half;
+
+                        TimeRuler {
+                            ticks: root.ruler-ticks;
+                        }
+
+                        wfpanel := WaveformPanel {
+                            wave-image: root.wave-image;
+                            has-audio: root.has-audio;
+                            t-empty: root.t-waveform-empty;
+                            track-label: root.track-label;
+                            zoom-label: root.zoom-label;
+                            playhead-frac: root.playhead-frac;
+                            preview-mode: root.preview-mode;
+                            can-preview: root.can-preview;
+                            grid-ticks: root.grid-ticks;
+                            sel-start-frac <=> root.sel-start-frac;
+                            sel-end-frac <=> root.sel-end-frac;
+                            toggle-preview() => { root.toggle-preview(); }
+                            zoom(f, a) => { root.wave-zoom(f, a); }
+                            pan(d) => { root.wave-pan(d); }
+                            fit() => { root.wave-fit(); }
+                            select(a, b) => { root.wave-select(a, b); }
+                            viewport-changed() => { root.wave-viewport-changed(); }
+                        }
+                    }
                 }
 
-                formant := PrecisionSlider {
+                // Right column: engine control strips (30 %).
+                Rectangle {
                     layout-order: root.rtl ? 0 : 2;
-                    label: root.t-formant;
-                    rtl: root.rtl;
-                    unit: "mm";
-                    min: 130.0;
-                    max: 190.0;
-                    step: 1.0;
-                    coarse-step: 10.0;
-                    neutral: 175.0;
-                    accent: Tokens.accent-formant;
-                    readout: root.formant-readout;
-                    enabled: root.has-project;
-                    value <=> root.formant-value;
-                    changed(v) => { root.formant-changed(v); }
+                    width: 330px;
+
+                    VerticalLayout {
+                        padding: Tokens.sp-quarter;
+                        spacing: Tokens.sp-1;
+
+                        pitch := PrecisionSlider {
+                            label: root.t-pitch;
+                            rtl: root.rtl;
+                            unit: "st";
+                            min: -12.0;
+                            max: 12.0;
+                            step: 0.01;
+                            coarse-step: 1.0;
+                            neutral: 0.0;
+                            accent: Tokens.accent-pitch;
+                            readout: root.pitch-readout;
+                            enabled: root.has-project;
+                            value <=> root.pitch-value;
+                            changed(v) => { root.pitch-changed(v); }
+                        }
+
+                        air := PrecisionSlider {
+                            label: root.t-air;
+                            rtl: root.rtl;
+                            unit: "dB";
+                            min: -24.0;
+                            max: 12.0;
+                            step: 0.1;
+                            coarse-step: 1.0;
+                            neutral: 0.0;
+                            accent: Tokens.accent-air;
+                            readout: root.air-readout;
+                            enabled: root.has-project;
+                            value <=> root.air-value;
+                            changed(v) => { root.air-changed(v); }
+                        }
+
+                        formant := PrecisionSlider {
+                            label: root.t-formant;
+                            rtl: root.rtl;
+                            unit: "mm";
+                            min: 130.0;
+                            max: 190.0;
+                            step: 1.0;
+                            coarse-step: 10.0;
+                            neutral: 175.0;
+                            accent: Tokens.accent-formant;
+                            readout: root.formant-readout;
+                            enabled: root.has-project;
+                            value <=> root.formant-value;
+                            changed(v) => { root.formant-changed(v); }
+                        }
+
+                        spec-slot := Rectangle {
+                            // 7.2e mounts the real-FFT spectrum analyzer
+                            // here; until then the column keeps its
+                            // rhythm without a decorative stand-in.
+                        }
+                    }
                 }
             }
         }
 
-        Rectangle {
-            height: 1px;
-            background: Tokens.border-subtle;
-        }
+        Rectangle { height: 1px; background: Tokens.border-subtle; }
 
+        // ── Transport (72 px) ───────────────────────────────────────
         TransportBar {
             has-project: root.has-project;
             playing: root.playing;
             recording: root.recording;
-            time-readout: root.time-readout;
+            time-cur: root.time-cur;
+            time-total: root.time-total;
             t-record: root.t-record;
-            rtl: root.rtl;
+            volume <=> root.volume;
+            meter-l: root.meter-l;
+            meter-r: root.meter-r;
+            peak-l: root.peak-l;
+            peak-r: root.peak-r;
             play-pause() => { root.play-pause(); }
             stop() => { root.transport-stop(); }
             rewind() => { root.transport-rewind(); }
+            forward() => { root.transport-forward(); }
             record-toggle() => { root.record-toggle(); }
+            volume-changed(v) => { root.volume-changed(v); }
         }
 
-        Rectangle {
-            height: 1px;
-            background: Tokens.border-subtle;
-        }
+        Rectangle { height: 1px; background: Tokens.border-subtle; }
 
-        // ── Status bar (bg/elevated, 32 px) ─────────────────────────
-        Rectangle {
-            height: 32px;
-            background: Tokens.bg-elevated;
-
-            HorizontalLayout {
-                padding-left: Tokens.sp-1;
-                padding-right: Tokens.sp-1;
-                spacing: Tokens.sp-2;
-
-                Text {
-                    layout-order: root.rtl ? 1 : 0;
-                    text: root.status_core;
-                    color: Tokens.text-muted;
-                    font-size: Tokens.font-size-small;
-                    vertical-alignment: center;
-                    overflow: elide;
-                }
-
-                Rectangle { layout-order: root.rtl ? 0 : 1; } // spring
-            }
+        // ── Status bar (24 px) ──────────────────────────────────────
+        StatusBar {
+            rtl: root.rtl;
+            status-core: root.status-core;
+            seg-file: root.seg-file;
+            seg-format: root.seg-format;
+            seg-resources: root.seg-resources;
+            seg-in: root.seg-in;
+            seg-out: root.seg-out;
         }
     }
 
     // ── Export panel (floating overlay) ─────────────────────────────
     // Lives OUTSIDE the root layout as the last child so it paints above
-    // every sibling: it deliberately overflows the 56 px header, and
-    // later layout siblings would otherwise cover it. Anchored under the
-    // export button in both directions (LTR: button on the right →
-    // panel's right edge under it; RTL: mirrored to the left).
+    // every sibling. Anchored under the toolbar's export slot in both
+    // directions (LTR: right edge; RTL: mirrored to the left).
     if root.has-project && root.export-open: export-panel := Rectangle {
-        x: root.rtl ? expbtn.x : expbtn.x + expbtn.width - self.width;
-        y: 60px;
+        x: root.rtl ? 16px : root.width - self.width - 16px;
+        y: 76px;
         width: 240px;
         height: 168px;
         background: Tokens.bg-elevated;
         border-radius: Tokens.radius-md;
         border-width: 1px;
-        border-color: Tokens.border-subtle;
+        border-color: Tokens.border-strong;
 
         VerticalLayout {
             padding: Tokens.sp-1;
@@ -413,7 +487,7 @@ export component AppWindow inherits Window {
             export-go := Rectangle {
                 height: 30px;
                 border-radius: Tokens.radius-sm;
-                background: export-touch.has-hover ? Tokens.bg-elevated-hover : Tokens.bg-base;
+                background: export-touch.has-hover ? Tokens.bg-elevated-hover : Tokens.bg-panel;
                 border-width: 1px;
                 border-color: Tokens.accent-pitch;
 
@@ -453,7 +527,7 @@ export component AppWindow inherits Window {
             background: Tokens.bg-elevated;
             border-radius: Tokens.radius-md;
             border-width: 1px;
-            border-color: Tokens.border-subtle;
+            border-color: Tokens.border-strong;
 
             // Keep panel clicks from reaching the scrim closer.
             TouchArea { }
@@ -513,7 +587,7 @@ export component AppWindow inherits Window {
                             height: 24px;
                             border-radius: Tokens.radius-sm;
                             background: dev-touch.has-hover ? Tokens.bg-elevated-hover
-                                : item.active ? Tokens.bg-base : transparent;
+                                : item.active ? Tokens.bg-panel : transparent;
                             border-width: 1px;
                             border-color: item.active ? Tokens.accent-pitch : transparent;
 
@@ -563,7 +637,7 @@ export component AppWindow inherits Window {
                             height: 24px;
                             border-radius: Tokens.radius-sm;
                             background: dev-touch2.has-hover ? Tokens.bg-elevated-hover
-                                : item.active ? Tokens.bg-base : transparent;
+                                : item.active ? Tokens.bg-panel : transparent;
                             border-width: 1px;
                             border-color: item.active ? Tokens.accent-formant : transparent;
 
@@ -593,7 +667,7 @@ export component AppWindow inherits Window {
 
                     testbtn := Rectangle {
                         border-radius: Tokens.radius-sm;
-                        background: test-touch.has-hover ? Tokens.bg-elevated-hover : Tokens.bg-base;
+                        background: test-touch.has-hover ? Tokens.bg-elevated-hover : Tokens.bg-panel;
                         border-width: 1px;
                         border-color: Tokens.accent-air;
 
@@ -614,7 +688,7 @@ export component AppWindow inherits Window {
 
                     Rectangle {
                         border-radius: Tokens.radius-sm;
-                        background: refresh-touch.has-hover ? Tokens.bg-elevated-hover : Tokens.bg-base;
+                        background: refresh-touch.has-hover ? Tokens.bg-elevated-hover : Tokens.bg-panel;
                         border-width: 1px;
                         border-color: Tokens.border-subtle;
                         width: 72px;
@@ -631,6 +705,88 @@ export component AppWindow inherits Window {
                             width: parent.width;
                             height: parent.height;
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── About dialog (Help menu; real version/license constants) ────
+    if root.about-open: Rectangle {
+        background: #00000066;
+
+        TouchArea {
+            clicked => { root.about-close(); }
+        }
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 320px;
+            height: 180px;
+            background: Tokens.bg-elevated;
+            border-radius: Tokens.radius-md;
+            border-width: 1px;
+            border-color: Tokens.border-strong;
+
+            TouchArea { }
+
+            VerticalLayout {
+                padding: Tokens.sp-2;
+                spacing: Tokens.sp-1;
+                alignment: center;
+
+                Text {
+                    text: "Micro-Vocal Lab";
+                    color: Tokens.text-primary;
+                    font-size: Tokens.font-size-title;
+                    font-weight: 600;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: root.t-version;
+                    color: Tokens.accent-pitch;
+                    font-family: Tokens.font-mono;
+                    font-size: Tokens.font-size-readout;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "TD-PSOLA · LPC · pYIN";
+                    color: Tokens.text-muted;
+                    font-family: Tokens.font-mono;
+                    font-size: Tokens.font-size-small;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "GPL-3.0-or-later · github.com/salim77007j/voi55";
+                    color: Tokens.text-faint;
+                    font-family: Tokens.font-mono;
+                    font-size: Tokens.font-size-small;
+                    horizontal-alignment: center;
+                }
+
+                Rectangle {
+                    height: 28px;
+                    width: 120px;
+                    border-radius: Tokens.radius-sm;
+                    background: about-touch.has-hover ? Tokens.bg-elevated-hover : Tokens.bg-panel;
+                    border-width: 1px;
+                    border-color: Tokens.border-subtle;
+
+                    about-touch := TouchArea {
+                        clicked => { root.about-close(); }
+                    }
+
+                    Text {
+                        text: root.t-devices-close;
+                        color: Tokens.text-primary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        width: parent.width;
+                        height: parent.height;
                     }
                 }
             }

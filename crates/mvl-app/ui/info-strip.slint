@@ -1,0 +1,146 @@
+// Copyright © salim77007j
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+// Track info strip (Phase 7.2): the left rail from the reference —
+// project identity, format and the pYIN analysis summary. Every readout
+// is fed from the loaded session (No-Fake-UI): the format panel reports
+// the real buffer configuration, the analysis panel the real pYIN
+// track; a missing value renders as "—" rather than a fabricated one.
+
+import { Tokens } from "tokens.slint";
+
+// A titled info panel (the reference's recessed gray cards).
+component InfoPanel inherits Rectangle {
+    background: Tokens.bg-panel;
+    border-radius: Tokens.radius-sm;
+    border-width: 1px;
+    border-color: Tokens.border-subtle;
+
+    in property <string> title;
+
+    VerticalLayout {
+        padding: Tokens.sp-1;
+        spacing: Tokens.sp-half;
+        alignment: start;
+
+        Text {
+            text: root.title;
+            color: Tokens.text-faint;
+            font-size: 10px;
+            letter-spacing: 1.5px;
+        }
+
+        Rectangle { height: 1px; background: Tokens.border-subtle; }
+
+        @children
+    }
+}
+
+// One readout row: caption left, mono value right.
+component InfoRow inherits Rectangle {
+    height: 18px;
+
+    in property <string> caption;
+    in property <string> value;
+    in property <color> accent: Tokens.text-primary;
+
+    Text {
+        x: 0;
+        text: root.caption;
+        color: Tokens.text-muted;
+        font-size: Tokens.font-size-small;
+        vertical-alignment: center;
+    }
+
+    Text {
+        x: parent.width - self.width;
+        text: root.value;
+        color: root.accent;
+        font-family: Tokens.font-mono;
+        font-size: Tokens.font-size-small;
+        vertical-alignment: center;
+    }
+}
+
+export component InfoStrip inherits Rectangle {
+    background: Tokens.bg-base;
+
+    in property <bool> rtl: false;
+    in property <string> t-track-panel;
+    in property <string> t-format-panel;
+    in property <string> t-analysis-panel;
+    in property <string> t-name;      // caption "Name"
+    in property <string> t-rate;      // caption "Sample rate"
+    in property <string> t-domain;    // caption "Engine domain"
+    in property <string> t-channels;  // caption "Channels"
+    in property <string> t-f0;        // caption "Median F0"
+    in property <string> t-voiced;    // caption "Voiced"
+    in property <string> t-frames;    // caption "Frames"
+    // Real session data (empty string = unknown → dash).
+    in property <string> info-name: "";
+    in property <string> info-rate: "";
+    in property <string> info-domain: "";
+    in property <string> info-channels: "";
+    in property <string> info-frames: "";
+    in property <string> info-f0: "";
+    in property <string> info-voiced: "";
+    // Playhead-time readout (real player position).
+    in property <string> info-position: "";
+
+    VerticalLayout {
+        padding: Tokens.sp-1;
+        spacing: Tokens.sp-1;
+
+        InfoPanel {
+            title: root.t-track-panel;
+
+            VerticalLayout {
+                spacing: Tokens.sp-quarter;
+
+                InfoRow { caption: root.t-name; value: root.info-name == "" ? "—" : root.info-name; }
+                InfoRow {
+                    caption: root.t-rate;
+                    value: root.info-rate == "" ? "—" : root.info-rate;
+                    accent: Tokens.accent-pitch;
+                }
+                InfoRow { caption: root.t-frames; value: root.info-frames == "" ? "—" : root.info-frames; }
+            }
+        }
+
+        InfoPanel {
+            title: root.t-format-panel;
+
+            VerticalLayout {
+                spacing: Tokens.sp-quarter;
+
+                InfoRow { caption: root.t-domain; value: root.info-domain == "" ? "—" : root.info-domain; }
+                InfoRow {
+                    caption: root.t-channels;
+                    value: root.info-channels == "" ? "—" : root.info-channels;
+                    accent: Tokens.accent-formant;
+                }
+            }
+        }
+
+        InfoPanel {
+            title: root.t-analysis-panel;
+
+            VerticalLayout {
+                spacing: Tokens.sp-quarter;
+
+                InfoRow {
+                    caption: root.t-f0;
+                    value: root.info-f0 == "" ? "—" : root.info-f0;
+                    accent: Tokens.accent-pitch;
+                }
+                InfoRow {
+                    caption: root.t-voiced;
+                    value: root.info-voiced == "" ? "—" : root.info-voiced;
+                    accent: Tokens.accent-air;
+                }
+            }
+        }
+
+        Rectangle { } // spring
+    }
+}
